@@ -12,6 +12,7 @@ from .profile import InterestProfileStore
 
 
 RECOMMENDATION_COOLDOWN_DAYS = 30
+SIGNIFICANT_STAR_GROWTH = 100
 
 
 class RecommendationEngine:
@@ -53,7 +54,7 @@ class RecommendationEngine:
         results: list[dict[str, Any]] = []
         for item in candidates:
             item_id = int(item["id"])
-            if item_id in recent_ids and not self._has_fresh_release(
+            if item_id in recent_ids and not self._has_cooldown_override(
                 item,
                 current,
             ):
@@ -137,6 +138,17 @@ class RecommendationEngine:
             ):
                 score += 10.0 + float(weight) * 0.35
                 matched.append(interest)
+        target = str(
+            item.get("repo_full_name")
+            or item.get("url")
+            or ""
+        ).casefold()
+        if any(
+            favorite.casefold() in target
+            for favorite in profile.get("favorite_projects", [])
+        ):
+            score += 20.0
+            matched.append("已收藏项目")
         published_at = self._parse_datetime(
             item.get("published_at")
         )
@@ -159,6 +171,24 @@ class RecommendationEngine:
                     int(item["stars"]) + 1
                 ) * 2,
             )
+        repo_name = str(
+            item.get("repo_full_name")
+            or ""
+        )
+        if repo_name:
+            growth = self.database.star_growth(
+                repo_name,
+                7,
+            )
+            if growth:
+                metadata["star_growth_7d"] = growth
+                score += min(
+                    10.0,
+                    max(
+                        0.0,
+                        growth / 50.0,
+                    ),
+                )
         source = str(item.get("source") or "").casefold()
         if "official" in source:
             score += 5.0
@@ -200,22 +230,35 @@ class RecommendationEngine:
             for excluded in profile["excluded_topics"]
         )
 
-    @staticmethod
-    def _has_fresh_release(
+    def _has_cooldown_override(
+        self,
         item: dict[str, Any],
         current: datetime,
     ) -> bool:
-        """允许最近七天的重大 Release 绕过普通推荐冷却。"""
+        """允许新 Release 或显著 Star 增长绕过推荐冷却。"""
         release = (
             item.get("metadata") or {}
         ).get("latest_release") or {}
         published = RecommendationEngine._parse_datetime(
             release.get("published_at")
         )
-        return bool(
+        fresh_release = bool(
             published
             and current - published <= timedelta(days=7)
         )
+        repo_name = str(
+            item.get("repo_full_name")
+            or ""
+        )
+        growth = (
+            self.database.star_growth(
+                repo_name,
+                7,
+            )
+            if repo_name
+            else 0
+        )
+        return fresh_release or growth >= SIGNIFICANT_STAR_GROWTH
 
     @staticmethod
     def _match_reason(

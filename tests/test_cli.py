@@ -53,6 +53,23 @@ class CLITestCase(unittest.TestCase):
         self.assertEqual(args.timezone, "UTC")
         self.assertEqual(args.command, "init-db")
 
+    def test_parser_accepts_data_directory_after_subcommand(self) -> None:
+        """每个顶层命令也应支持在子命令后指定运行目录。"""
+        parser = build_parser()
+
+        args = parser.parse_args(
+            [
+                "init-db",
+                "--data-dir",
+                str(self.runtime_dir),
+            ]
+        )
+
+        self.assertEqual(
+            args.data_dir,
+            str(self.runtime_dir),
+        )
+
     def test_init_feedback_profile_and_report_commands(self) -> None:
         """初始化、反馈、查看画像和指定日期日报应可连续执行。"""
         common = [
@@ -68,6 +85,13 @@ class CLITestCase(unittest.TestCase):
                 ]
             ),
             0,
+        )
+        self.assertTrue(
+            (
+                self.runtime_dir
+                / "logs"
+                / "daily-intelligence.log"
+            ).is_file()
         )
         self.assertEqual(
             main(

@@ -30,6 +30,7 @@ class DailyReportRenderer:
     ) -> str:
         """渲染日报主体和三条重点推荐。"""
         current_date = report_date or date.today()
+        max_items = max(0, total_limit)
         grouped: dict[str, list[dict[str, Any]]] = {
             key: []
             for key, _, _ in SECTION_DEFINITIONS
@@ -37,6 +38,15 @@ class DailyReportRenderer:
         seen_urls: set[str] = set()
         all_items: list[dict[str, Any]] = []
         for item in items:
+            if len(all_items) >= max_items:
+                break
+            metadata = item.get("metadata") or {}
+            if (
+                item.get("item_type") == "news"
+                and metadata.get("is_supplement")
+                and not metadata.get("is_major_supplement")
+            ):
+                continue
             normalized = normalize_url(
                 str(item.get("url") or "")
             )

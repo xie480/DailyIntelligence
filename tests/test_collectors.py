@@ -52,6 +52,33 @@ class FakeOpener:
         raise AssertionError(f"没有匹配的 URL: {request.full_url}")
 
 
+class FlakyOpener:
+    """第一次返回限流错误，第二次返回成功响应。"""
+
+    def __init__(self) -> None:
+        """初始化调用计数。"""
+        self.calls = 0
+
+    def __call__(
+        self,
+        request: Request,
+        timeout: int,
+    ) -> FakeResponse:
+        """模拟一次 429 后恢复。"""
+        self.calls += 1
+        if self.calls == 1:
+            raise HTTPError(
+                request.full_url,
+                429,
+                "rate limited",
+                {
+                    "Retry-After": "0",
+                },
+                None,
+            )
+        return FakeResponse(b"{}")
+
+
 class CollectorTestCase(unittest.TestCase):
     """验证外部采集器在不联网时的解析结果。"""
 
@@ -182,6 +209,43 @@ class CollectorTestCase(unittest.TestCase):
         self.assertEqual(items[0].summary, "Useful update")
         self.assertTrue(items[0].metadata["is_primary"])
         self.assertFalse(items[1].metadata["is_primary"])
+
+    def test_github_client_retries_rate_limit(self) -> None:
+        """GitHub 429 应按 Retry-After 重试并返回结果。"""
+        opener = FlakyOpener()
+        sleeps: list[float] = []
+        client = GitHubClient(
+            opener=opener,
+            sleep_fn=sleeps.append,
+        )
+
+        self.assertEqual(
+            client.get_json("/rate-limit"),
+            {},
+        )
+        self.assertEqual(opener.calls, 2)
+        self.assertEqual(sleeps, [0.0])
+
+    def test_trending_html_parser_extracts_repository_fields(self) -> None:
+        """Trending HTML 补充解析应提取仓库、语言、Star 和今日增长。"""
+        html = b"""
+        <article class="Box-row">
+          <h2><a href="/acme/trending">acme / trending</a></h2>
+          <p>Useful agent tool</p>
+          <span itemprop="programmingLanguage">Python</span>
+          <span>1,234 stars</span>
+          <span>56 stars today</span>
+        </article>
+        """
+
+        items = GitHubCollector.parse_trending_html(
+            html.decode(),
+        )
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].repo_full_name, "acme/trending")
+        self.assertEqual(items[0].stars, 1234)
+        self.assertEqual(items[0].metadata["stars_today"], 56)
 
 
 if __name__ == "__main__":

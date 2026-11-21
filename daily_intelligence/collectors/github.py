@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from typing import Any, Callable, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -16,6 +18,79 @@ from ..models import Item
 GITHUB_API_URL = "https://api.github.com"
 DEFAULT_USER_AGENT = "Daily-Intelligence/1.0"
 DEFAULT_API_VERSION = "2022-11-28"
+
+
+class _TrendingParser(HTMLParser):
+    """解析 GitHub Trending 页面中的仓库卡片。"""
+
+    def __init__(self) -> None:
+        """初始化卡片和当前字段状态。"""
+        super().__init__()
+        self.cards: list[dict[str, Any]] = []
+        self.current: dict[str, Any] | None = None
+        self.active_field: str | None = None
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        """识别 article、仓库链接、描述、语言和统计字段。"""
+        attributes = dict(attrs)
+        classes = set(
+            (attributes.get("class") or "").split()
+        )
+        if tag == "article" and "Box-row" in classes:
+            self.current = {
+                "href": "",
+                "title": "",
+                "description": "",
+                "language": "",
+                "stats": [],
+            }
+            self.active_field = None
+            return
+        if self.current is None:
+            return
+        if tag == "a" and attributes.get("href", "").startswith("/"):
+            self.current["href"] = attributes["href"]
+            self.active_field = "title"
+        elif tag == "p":
+            self.active_field = "description"
+        elif tag == "span" and attributes.get("itemprop") == "programmingLanguage":
+            self.active_field = "language"
+        elif tag == "span":
+            self.active_field = "stats"
+
+    def handle_endtag(
+        self,
+        tag: str,
+    ) -> None:
+        """结束字段或保存完整仓库卡片。"""
+        if tag in {
+            "a",
+            "p",
+            "span",
+        }:
+            self.active_field = None
+        if tag == "article" and self.current:
+            self.cards.append(self.current)
+            self.current = None
+
+    def handle_data(
+        self,
+        data: str,
+    ) -> None:
+        """收集当前字段中的文本。"""
+        if not self.current or not self.active_field:
+            return
+        value = data.strip()
+        if not value:
+            return
+        if self.active_field == "stats":
+            self.current["stats"].append(value)
+        else:
+            self.current[self.active_field] += f" {value}"
 
 
 class GitHubClient:
@@ -160,6 +235,60 @@ class GitHubCollector:
                     collected.append(item)
         return deduplicate_items(collected)
 
+    @staticmethod
+    def parse_trending_html(
+        html: str,
+    ) -> list[Item]:
+        """解析 GitHub Trending HTML，作为官方 API 之外的补充来源。"""
+        parser = _TrendingParser()
+        parser.feed(html)
+        parser.close()
+        items: list[Item] = []
+        for card in parser.cards:
+            href = str(card.get("href") or "").strip()
+            if not href.startswith("/"):
+                continue
+            full_name = href.strip("/").removesuffix(".git")
+            if "/" not in full_name:
+                continue
+            stats = " ".join(card.get("stats") or [])
+            total_stars = _parse_stat(
+                stats,
+                r"([\d,]+)\s+stars(?!\s+today)",
+            )
+            stars_today = _parse_stat(
+                stats,
+                r"([\d,]+)\s+stars\s+today",
+            )
+            metadata = {
+                "section": "github_hot",
+                "stars_today": stars_today,
+                "source_type": "trending_html",
+            }
+            items.append(
+                Item(
+                    item_type="github",
+                    title=full_name,
+                    url=f"https://github.com/{full_name}",
+                    source="GitHub Trending",
+                    summary=str(
+                        card.get("description") or ""
+                    ).strip(),
+                    content=str(
+                        card.get("description") or ""
+                    ).strip(),
+                    category="trending",
+                    language=str(
+                        card.get("language") or ""
+                    ).strip()
+                    or None,
+                    repo_full_name=full_name,
+                    stars=total_stars,
+                    metadata=metadata,
+                )
+            )
+        return deduplicate_items(items)
+
     def _repository_to_item(
         self,
         repository: dict[str, Any],
@@ -247,4 +376,24 @@ class GitHubCollector:
         return datetime.now(
             ZoneInfo(timezone_name)
         ).date().isoformat()
+
+
+def _parse_stat(
+    value: str,
+    pattern: str,
+) -> int:
+    """从 Trending 统计文本中提取整数，缺失时返回零。"""
+    match = re.search(
+        pattern,
+        value,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return 0
+    return int(
+        match.group(1).replace(
+            ",",
+            "",
+        )
+    )
 

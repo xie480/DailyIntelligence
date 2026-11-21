@@ -181,7 +181,12 @@ class InterestProfileStore:
         changes: dict[str, int] = {}
         action = "note"
         message = "已记录反馈"
-        if clean_target and (
+        if clean_target and "收藏" in normalized_command:
+            action = "favorite"
+            if clean_target not in profile["favorite_projects"]:
+                profile["favorite_projects"].append(clean_target)
+            message = f"已收藏项目 {clean_target}"
+        elif clean_target and (
             "不要再推荐" in normalized_command
             or "不推荐" in normalized_command
             or "不喜欢" in normalized_command
@@ -192,6 +197,8 @@ class InterestProfileStore:
             message = f"已排除项目 {clean_target}"
         elif "喜欢" in normalized_command or "有意思" in normalized_command:
             action = "like"
+            if clean_target and clean_target not in profile["favorite_projects"]:
+                profile["favorite_projects"].append(clean_target)
             message = "已记录正向反馈"
         elif (
             "多关注" in normalized_command
@@ -314,6 +321,7 @@ class InterestProfileStore:
             "interests": dict(DEFAULT_INTERESTS),
             "excluded_projects": [],
             "excluded_topics": [],
+        "favorite_projects": [],
             "implicit_signals": {},
             "evidence": [],
             "updated_at": now_iso(),
@@ -346,6 +354,9 @@ class InterestProfileStore:
             ),
             "excluded_topics": _string_list(
                 raw.get("excluded_topics")
+            ),
+            "favorite_projects": _string_list(
+                raw.get("favorite_projects")
             ),
             "implicit_signals": _int_map(
                 raw.get("implicit_signals")

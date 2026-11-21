@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import unittest
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from daily_intelligence.config import RuntimePaths
@@ -60,6 +61,14 @@ class ProfileRecommendationTestCase(unittest.TestCase):
     def test_profile_supports_exclusion_disable_and_reset(self) -> None:
         """画像应支持排除项目、关闭和重置。"""
         self.profile.apply_feedback(
+            "收藏这个项目",
+            target="acme/favorite",
+        )
+        self.assertIn(
+            "acme/favorite",
+            self.profile.load()["favorite_projects"],
+        )
+        self.profile.apply_feedback(
             "不要再推荐这个项目",
             target="acme/demo",
         )
@@ -77,6 +86,10 @@ class ProfileRecommendationTestCase(unittest.TestCase):
         self.assertNotIn(
             "acme/demo",
             restored["excluded_projects"],
+        )
+        self.assertNotIn(
+            "acme/favorite",
+            restored["favorite_projects"],
         )
 
     def test_implicit_signal_requires_repeated_evidence(self) -> None:
@@ -168,6 +181,57 @@ class ProfileRecommendationTestCase(unittest.TestCase):
         self.assertNotIn(matching_id, result_ids)
         self.assertNotIn(excluded_id, result_ids)
         self.assertIn(old_id, result_ids)
+
+    def test_significant_star_growth_allows_recommendation_again(self) -> None:
+        """七天内显著 Star 增长应允许项目突破推荐冷却。"""
+        item_id = self.database.upsert_item(
+            Item(
+                item_type="github",
+                title="acme/growing-agent",
+                url="https://github.com/acme/growing-agent",
+                source="GitHub Search API",
+                summary="Agent harness",
+                category="AI Agent",
+                repo_full_name="acme/growing-agent",
+                stars=250,
+            )
+        )
+        self.database.save_repo_snapshot(
+            "acme/growing-agent",
+            "2026-11-14",
+            100,
+            10,
+        )
+        self.database.save_repo_snapshot(
+            "acme/growing-agent",
+            "2026-11-21",
+            250,
+            20,
+        )
+        self.database.save_feedback(
+            action="recommended",
+            target="acme/growing-agent",
+            item_id=item_id,
+        )
+
+        results = RecommendationEngine(
+            self.database,
+            self.profile,
+        ).recommend(
+            limit=10,
+            now=datetime.fromisoformat(
+                "2026-11-21T12:00:00+00:00"
+            ),
+            record=False,
+        )
+
+        self.assertIn(
+            item_id,
+            {
+                result["id"]
+                for result in results
+            },
+        )
 
 
 if __name__ == "__main__":

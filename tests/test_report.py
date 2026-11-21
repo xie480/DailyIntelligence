@@ -92,6 +92,37 @@ class ReportTestCase(unittest.TestCase):
         self.assertEqual(path.name, "2026-11-21.md")
         self.assertTrue(path.is_file())
 
+    def test_renderer_respects_total_limit(self) -> None:
+        """日报内容总条数应受 total_limit 控制。"""
+        items = [
+            {
+                "id": index,
+                "item_type": "news",
+                "title": f"News {index}",
+                "url": f"https://example.com/{index}",
+                "source": "Example",
+                "category": "software",
+                "summary": "Summary",
+                "published_at": "2026-11-21T08:00:00+00:00",
+                "metadata": {},
+                "recommendation_score": 10,
+                "match_reason": "测试",
+            }
+            for index in range(1, 8)
+        ]
+
+        markdown = DailyReportRenderer().render(
+            items,
+            report_date=date(
+                2026,
+                11,
+                21,
+            ),
+            total_limit=3,
+        )
+
+        self.assertEqual(markdown.count("### News "), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

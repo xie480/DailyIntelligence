@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import logging
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -14,6 +15,7 @@ DATABASE_DIR_NAME = "database"
 CONFIG_DIR_NAME = "config"
 REPORTS_DIR_NAME = "reports"
 LOGS_DIR_NAME = "logs"
+LOG_FILE_NAME = "daily-intelligence.log"
 DATABASE_FILE_NAME = "intelligence.db"
 PROFILE_FILE_NAME = "user_profile.json"
 SOURCES_FILE_NAME = "sources.json"
@@ -60,6 +62,11 @@ class RuntimePaths:
             directory.mkdir(parents=True, exist_ok=True)
         return self
 
+    @property
+    def log_path(self) -> Path:
+        """返回项目日志文件路径。"""
+        return self.logs_dir / LOG_FILE_NAME
+
 
 def timezone_or_default(
     timezone_name: str | None,
@@ -75,4 +82,48 @@ def now_iso(
     return datetime.now(
         timezone_or_default(timezone_name)
     ).isoformat(timespec="seconds")
+
+
+def configure_logging(
+    paths: RuntimePaths,
+) -> logging.Logger:
+    """为当前运行目录配置 UTF-8 文件日志并关闭旧目录句柄。"""
+    paths.logs_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    logger = logging.getLogger("daily_intelligence")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    target_path = str(
+        paths.log_path.resolve()
+    )
+    for handler in list(logger.handlers):
+        handler_path = getattr(
+            handler,
+            "baseFilename",
+            "",
+        )
+        if handler_path != target_path:
+            logger.removeHandler(handler)
+            handler.close()
+    if not any(
+        getattr(handler, "baseFilename", "") == target_path
+        for handler in logger.handlers
+    ):
+        handler = logging.FileHandler(
+            paths.log_path,
+            encoding="utf-8",
+        )
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s %(levelname)s %(message)s"
+            )
+        )
+        logger.addHandler(handler)
+    logger.info(
+        "runtime initialized: %s",
+        paths.data_dir,
+    )
+    return logger
 

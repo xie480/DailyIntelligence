@@ -18,6 +18,7 @@ from .config import (
     DEFAULT_DATA_DIR,
     DEFAULT_TIMEZONE,
     RuntimePaths,
+    configure_logging,
     timezone_or_default,
 )
 from .database import Database
@@ -68,6 +69,27 @@ DEFAULT_SOURCES = {
 }
 
 
+def _add_runtime_overrides(
+    parser: argparse.ArgumentParser,
+) -> None:
+    """让子命令也能在命令名后覆盖运行目录、源配置和时区。"""
+    parser.add_argument(
+        "--data-dir",
+        default=argparse.SUPPRESS,
+        help="覆盖运行数据目录",
+    )
+    parser.add_argument(
+        "--source-config",
+        default=argparse.SUPPRESS,
+        help="覆盖采集源 JSON 配置路径",
+    )
+    parser.add_argument(
+        "--timezone",
+        default=argparse.SUPPRESS,
+        help="覆盖 IANA 时区",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构造包含所有 v1 命令的参数解析器。"""
     parser = argparse.ArgumentParser(
@@ -99,30 +121,34 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
 
-    subparsers.add_parser(
+    init_parser = subparsers.add_parser(
         "init-db",
         help="初始化数据库、画像和默认采集配置",
     )
+    _add_runtime_overrides(init_parser)
 
     github_parser = subparsers.add_parser(
         "collect-github",
         help="采集 GitHub 仓库和最新 Release",
     )
+    _add_runtime_overrides(github_parser)
     github_parser.add_argument(
         "--no-releases",
         action="store_true",
         help="不请求仓库最新 Release",
     )
 
-    subparsers.add_parser(
+    rss_parser = subparsers.add_parser(
         "collect-rss",
         help="采集 RSS/Atom 新闻",
     )
+    _add_runtime_overrides(rss_parser)
 
     recommend_parser = subparsers.add_parser(
         "recommend",
         help="获取待推荐内容",
     )
+    _add_runtime_overrides(recommend_parser)
     recommend_parser.add_argument(
         "--limit",
         type=int,
@@ -151,6 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
         "feedback",
         help="更新用户兴趣反馈",
     )
+    _add_runtime_overrides(feedback_parser)
     feedback_parser.add_argument(
         "feedback_text",
     )
@@ -164,6 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
         "profile",
         help="查看、关闭、开启或重置兴趣画像",
     )
+    _add_runtime_overrides(profile_parser)
     profile_subparsers = profile_parser.add_subparsers(
         dest="profile_command",
         required=True,
@@ -171,24 +199,29 @@ def build_parser() -> argparse.ArgumentParser:
     show_parser = profile_subparsers.add_parser(
         "show",
     )
+    _add_runtime_overrides(show_parser)
     show_parser.add_argument(
         "--json",
         action="store_true",
     )
-    profile_subparsers.add_parser(
+    reset_parser = profile_subparsers.add_parser(
         "reset",
     )
-    profile_subparsers.add_parser(
+    _add_runtime_overrides(reset_parser)
+    enable_parser = profile_subparsers.add_parser(
         "enable",
     )
-    profile_subparsers.add_parser(
+    _add_runtime_overrides(enable_parser)
+    disable_parser = profile_subparsers.add_parser(
         "disable",
     )
+    _add_runtime_overrides(disable_parser)
 
     report_parser = subparsers.add_parser(
         "report",
         help="生成并保存指定日期日报",
     )
+    _add_runtime_overrides(report_parser)
     report_parser.add_argument(
         "--date",
         dest="report_date",
@@ -206,10 +239,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="不写入推荐历史",
     )
 
-    subparsers.add_parser(
+    dry_run_parser = subparsers.add_parser(
         "dry-run",
         help="使用内置样例生成日报，不访问网络或写入运行数据",
     )
+    _add_runtime_overrides(dry_run_parser)
     return parser
 
 
@@ -258,6 +292,7 @@ def _runtime(
     """创建已初始化的运行路径、数据库和画像存储。"""
     paths = RuntimePaths.from_data_dir(args.data_dir)
     paths.ensure()
+    configure_logging(paths)
     database = Database(paths.database_path)
     database.initialize()
     profile = InterestProfileStore(
