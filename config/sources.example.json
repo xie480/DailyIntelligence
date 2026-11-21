@@ -1,0 +1,45 @@
+{
+  "github": {
+    "per_page": 20,
+    "include_releases": true,
+    "queries": [
+      {
+        "name": "AI Agent",
+        "query": "topic:agent",
+        "section": "github_hot"
+      },
+      {
+        "name": "MCP Skills",
+        "query": "topic:mcp",
+        "section": "github_hot"
+      },
+      {
+        "name": "Interesting Projects",
+        "query": "stars:>1000 pushed:>2026-01-01",
+        "section": "github_interesting"
+      }
+    ]
+  },
+  "rss": {
+    "window_hours": 24,
+    "supplement_days": 7,
+    "feeds": [
+      {
+        "name": "OpenAI News",
+        "url": "https://openai.com/news/rss.xml",
+        "category": "ai"
+      },
+      {
+        "name": "Hugging Face Blog",
+        "url": "https://huggingface.co/blog/feed.xml",
+        "category": "ai"
+      },
+      {
+        "name": "GitHub Blog",
+        "url": "https://github.blog/feed/",
+        "category": "software"
+      }
+    ]
+  }
+}
+
