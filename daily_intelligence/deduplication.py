@@ -7,7 +7,10 @@ import re
 from difflib import SequenceMatcher
 from html import unescape
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
+
+if TYPE_CHECKING:
+    from .models import Item
 
 
 TRACKING_QUERY_PREFIXES = (
@@ -134,4 +137,84 @@ def deduplicate_urls(
         seen.add(normalized)
         result.append(url)
     return result
+
+
+def deduplicate_items(
+    items: Iterable["Item"],
+    similarity_threshold: float = 0.86,
+) -> list["Item"]:
+    """合并 URL、指纹或标题相似的项目，并保留关联来源。"""
+    result: list["Item"] = []
+    seen_urls: dict[tuple[str, str], int] = {}
+    seen_fingerprints: dict[tuple[str, str], int] = {}
+    for item in items:
+        item_key = (
+            item.item_type,
+            normalize_url(item.url),
+        )
+        fingerprint_key = (
+            item.item_type,
+            content_fingerprint(
+                item.title,
+                item.content or item.summary,
+            ),
+        )
+        duplicate_index = seen_urls.get(item_key)
+        if duplicate_index is None:
+            duplicate_index = seen_fingerprints.get(fingerprint_key)
+        if duplicate_index is None:
+            duplicate_index = _find_similar_item(
+                result,
+                item,
+                similarity_threshold,
+            )
+        if duplicate_index is None:
+            seen_urls[item_key] = len(result)
+            seen_fingerprints[fingerprint_key] = len(result)
+            result.append(item)
+            continue
+        result[duplicate_index] = _merge_item_sources(
+            result[duplicate_index],
+            item,
+        )
+    return result
+
+
+def _find_similar_item(
+    items: list["Item"],
+    candidate: "Item",
+    threshold: float,
+) -> int | None:
+    """在同类型和同分类项目中寻找超过阈值的相似标题。"""
+    candidate_text = f"{candidate.title} {candidate.summary}"
+    for index, item in enumerate(items):
+        if item.item_type != candidate.item_type:
+            continue
+        if item.category and candidate.category and item.category != candidate.category:
+            continue
+        current_text = f"{item.title} {item.summary}"
+        if text_similarity(current_text, candidate_text) >= threshold:
+            return index
+    return None
+
+
+def _merge_item_sources(
+    current: "Item",
+    duplicate: "Item",
+) -> "Item":
+    """把重复条目的来源和链接合并到主条目元数据。"""
+    metadata = dict(current.metadata)
+    related_sources = list(metadata.get("related_sources", []))
+    if duplicate.source != current.source and duplicate.source not in related_sources:
+        related_sources.append(duplicate.source)
+    related_urls = list(metadata.get("related_urls", []))
+    normalized_current = normalize_url(current.url)
+    normalized_duplicate = normalize_url(duplicate.url)
+    if normalized_duplicate != normalized_current and duplicate.url not in related_urls:
+        related_urls.append(duplicate.url)
+    if related_sources:
+        metadata["related_sources"] = related_sources
+    if related_urls:
+        metadata["related_urls"] = related_urls
+    return current.with_updates(metadata=metadata)
 
