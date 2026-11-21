@@ -153,6 +153,7 @@ class GitHubCollector:
                 item = self._repository_to_item(
                     repository,
                     query_name,
+                    query_config.get("section"),
                     include_releases,
                 )
                 if item:
@@ -163,6 +164,7 @@ class GitHubCollector:
         self,
         repository: dict[str, Any],
         query_name: str,
+        section: str | None,
         include_releases: bool,
     ) -> Item | None:
         """把 GitHub 仓库 JSON 转成统一项目模型。"""
@@ -195,6 +197,8 @@ class GitHubCollector:
             "updated_at": repository.get("updated_at"),
             "pushed_at": repository.get("pushed_at"),
         }
+        if section:
+            metadata["section"] = section
         if latest_release:
             metadata["latest_release"] = latest_release
         return Item(
