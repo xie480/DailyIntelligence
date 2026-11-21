@@ -20,6 +20,7 @@ env/
 # Runtime data should stay outside the source repository.
 runtime/
 data/
+.test-tmp/
 *.db
 *.db-shm
 *.db-wal
