@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "enabled": true,
+  "interests": {
+    "AI Agent": 95,
+    "Agent Harness": 90,
+    "Hermes": 90,
+    "Codex": 90,
+    "Claude Code": 80,
+    "MCP": 90,
+    "Skills": 88,
+    "AI Coding": 90,
+    "Software Engineering": 80,
+    "System Architecture": 75,
+    "Frontend": 65,
+    "UI/UX": 60,
+    "Open Source": 85,
+    "Self-hosting": 75,
+    "Innovative Projects": 80,
+    "Model Releases": 50,
+    "普通 AI 套壳项目": 15
+  },
+  "excluded_projects": [],
+  "excluded_topics": [],
+  "favorite_projects": [],
+  "implicit_signals": {},
+  "evidence": []
+}
+
