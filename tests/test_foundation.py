@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import shutil
 import sqlite3
 import unittest
-import uuid
 from pathlib import Path
 
 from daily_intelligence.config import RuntimePaths
 from daily_intelligence.database import Database
 from daily_intelligence.models import Item
+from tests.test_support import temporary_directory
 
 
 class FoundationTestCase(unittest.TestCase):
@@ -18,22 +17,21 @@ class FoundationTestCase(unittest.TestCase):
 
     def setUp(self) -> None:
         """创建当前测试独占的临时目录。"""
-        self.runtime_dir = (
-            Path.cwd()
-            / ".test-tmp"
-            / f"foundation-{uuid.uuid4().hex}"
+        self.runtime_tempdir = temporary_directory(
+            prefix="daily-intelligence-foundation-",
         )
-        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(
+            self.runtime_tempdir.cleanup,
+        )
+        self.runtime_dir = Path(
+            self.runtime_tempdir.name
+        )
         self.paths = RuntimePaths.from_data_dir(self.runtime_dir)
         self.database = Database(self.paths.database_path)
 
     def tearDown(self) -> None:
         """关闭数据库并释放临时目录。"""
         self.database.close()
-        shutil.rmtree(
-            self.runtime_dir,
-            ignore_errors=True,
-        )
 
     def test_runtime_paths_create_separated_directories(self) -> None:
         """运行目录应把数据库、画像、日报和日志分开。"""
@@ -144,6 +142,40 @@ class FoundationTestCase(unittest.TestCase):
         self.assertTrue(self.database.begin_run("rss", "rss:2026-11-21"))
         self.database.finish_run("rss:2026-11-21", "success")
         self.assertFalse(self.database.begin_run("rss", "rss:2026-11-21"))
+
+    def test_feedback_batch_rolls_back_as_one_transaction(self) -> None:
+        """批量推荐历史写入失败时应整体回滚。"""
+        self.database.initialize()
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.database.save_feedback_batch(
+                [
+                    {
+                        "action": "recommended",
+                        "target": "acme/valid",
+                        "item_id": None,
+                        "note": "valid",
+                        "signal": {
+                            "report_date": "2026-11-22",
+                        },
+                    },
+                    {
+                        "action": "recommended",
+                        "target": "acme/invalid",
+                        "item_id": 999999,
+                        "note": "invalid foreign key",
+                        "signal": {},
+                    },
+                ]
+            )
+
+        self.assertEqual(
+            self.database.list_feedback(
+                action="recommended",
+                limit=100,
+            ),
+            [],
+        )
 
     def test_snapshot_growth_and_feedback_history(self) -> None:
         """Star 快照应返回增量，反馈应保留结构化记录。"""

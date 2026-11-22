@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import shutil
 import unittest
-import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +11,7 @@ from daily_intelligence.database import Database
 from daily_intelligence.models import Item
 from daily_intelligence.profile import InterestProfileStore
 from daily_intelligence.recommendations import RecommendationEngine
+from tests.test_support import temporary_directory
 
 
 class ProfileRecommendationTestCase(unittest.TestCase):
@@ -20,12 +19,15 @@ class ProfileRecommendationTestCase(unittest.TestCase):
 
     def setUp(self) -> None:
         """创建隔离运行目录和数据库。"""
-        self.runtime_dir = (
-            Path.cwd()
-            / ".test-tmp"
-            / f"profile-{uuid.uuid4().hex}"
+        self.runtime_tempdir = temporary_directory(
+            prefix="daily-intelligence-profile-",
         )
-        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(
+            self.runtime_tempdir.cleanup,
+        )
+        self.runtime_dir = Path(
+            self.runtime_tempdir.name
+        )
         self.paths = RuntimePaths.from_data_dir(self.runtime_dir)
         self.paths.ensure()
         self.database = Database(self.paths.database_path)
@@ -38,10 +40,6 @@ class ProfileRecommendationTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         """关闭数据库并删除隔离目录。"""
         self.database.close()
-        shutil.rmtree(
-            self.runtime_dir,
-            ignore_errors=True,
-        )
 
     def test_explicit_feedback_has_priority_and_persists(self) -> None:
         """明确反馈应调整权重并能被新实例读取。"""

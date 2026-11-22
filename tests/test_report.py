@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import shutil
 import unittest
-import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from daily_intelligence.config import RuntimePaths
 from daily_intelligence.report import DailyReportRenderer, save_report
+from tests.test_support import temporary_directory
 
 
 class ReportTestCase(unittest.TestCase):
@@ -17,21 +16,20 @@ class ReportTestCase(unittest.TestCase):
 
     def setUp(self) -> None:
         """创建隔离报告目录。"""
-        self.runtime_dir = (
-            Path.cwd()
-            / ".test-tmp"
-            / f"report-{uuid.uuid4().hex}"
+        self.runtime_tempdir = temporary_directory(
+            prefix="daily-intelligence-report-",
         )
-        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(
+            self.runtime_tempdir.cleanup,
+        )
+        self.runtime_dir = Path(
+            self.runtime_tempdir.name
+        )
         self.paths = RuntimePaths.from_data_dir(self.runtime_dir)
         self.paths.ensure()
 
     def tearDown(self) -> None:
         """清理报告目录。"""
-        shutil.rmtree(
-            self.runtime_dir,
-            ignore_errors=True,
-        )
 
     def test_renderer_creates_sections_and_focus_without_duplicate_event(self) -> None:
         """日报应生成六个板块且重点推荐不重复展示同一 URL。"""
@@ -122,6 +120,25 @@ class ReportTestCase(unittest.TestCase):
         )
 
         self.assertEqual(markdown.count("### News "), 3)
+
+    def test_renderer_default_date_uses_injected_timezone(self) -> None:
+        """未显式传日期时，日报标题应使用注入时区的逻辑日期。"""
+        markdown = DailyReportRenderer().render(
+            [],
+            timezone_name="Asia/Shanghai",
+            now=datetime(
+                2026,
+                11,
+                22,
+                16,
+                tzinfo=timezone.utc,
+            ),
+        )
+
+        self.assertIn(
+            "# Daily Intelligence 日报 - 2026-11-23",
+            markdown,
+        )
 
     def test_focus_only_contains_rendered_items_and_unique_urls(self) -> None:
         """重点推荐只能来自已渲染板块，且 URL 不应重复。"""

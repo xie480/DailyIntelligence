@@ -3,41 +3,38 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import unittest
-import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from daily_intelligence.config import (
     DotEnvError,
+    date_in_timezone,
     load_project_settings,
     parse_env_file,
     resolve_project_root,
 )
+from tests.test_support import temporary_directory
 
 
 class ProjectConfigTestCase(unittest.TestCase):
     """验证项目 `.env` 解析、优先级和凭证安全边界。"""
 
     def setUp(self) -> None:
-        """创建不依赖系统临时目录的隔离项目目录。"""
-        self.project_root = (
-            Path.cwd()
-            / ".test-tmp"
-            / f"config-{uuid.uuid4().hex}"
+        """创建由操作系统管理的隔离项目目录。"""
+        self.project_tempdir = temporary_directory(
+            prefix="daily-intelligence-config-",
         )
-        self.project_root.mkdir(
-            parents=True,
-            exist_ok=True,
+        self.addCleanup(
+            self.project_tempdir.cleanup,
+        )
+        self.project_root = Path(
+            self.project_tempdir.name
         )
 
     def tearDown(self) -> None:
-        """删除隔离项目目录。"""
-        shutil.rmtree(
-            self.project_root,
-            ignore_errors=True,
-        )
+        """项目目录由 TemporaryDirectory 自动删除。"""
 
     def test_parse_env_supports_quotes_comments_blank_lines_and_crlf(
         self,
@@ -144,6 +141,39 @@ class ProjectConfigTestCase(unittest.TestCase):
         self.assertEqual(
             resolve_project_root(),
             Path(__file__).resolve().parents[1],
+        )
+
+    def test_date_in_timezone_handles_midnight_boundary(self) -> None:
+        """日期计算应根据指定 IANA 时区处理跨午夜边界。"""
+        before_midnight = datetime(
+            2026,
+            11,
+            22,
+            15,
+            59,
+            tzinfo=timezone.utc,
+        )
+        after_midnight = datetime(
+            2026,
+            11,
+            22,
+            16,
+            tzinfo=timezone.utc,
+        )
+
+        self.assertEqual(
+            date_in_timezone(
+                "Asia/Shanghai",
+                before_midnight,
+            ).isoformat(),
+            "2026-11-22",
+        )
+        self.assertEqual(
+            date_in_timezone(
+                "Asia/Shanghai",
+                after_midnight,
+            ).isoformat(),
+            "2026-11-23",
         )
 
     def test_env_files_are_ignored_except_example(self) -> None:

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
+import socket
+import ssl
 import unittest
-import uuid
 from datetime import datetime, timezone
 from email.utils import format_datetime
 from pathlib import Path
@@ -18,8 +18,10 @@ from daily_intelligence.collectors.github import (
     GitHubAPIError,
     GitHubCollector,
     GitHubClient,
+    GitHubNetworkError,
 )
 from daily_intelligence.collectors.rss import RSSCollector
+from tests.test_support import temporary_directory
 
 
 class FakeResponse:
@@ -114,6 +116,39 @@ class SequenceOpener:
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
+
+
+class RSSFeedOpener:
+    """按 Feed URL 返回内容或抛出离线网络异常。"""
+
+    def __init__(
+        self,
+        payload: bytes,
+    ) -> None:
+        """保存可用 Feed 的固定响应体。"""
+        self.payload = payload
+        self.calls: list[str] = []
+
+    def __call__(
+        self,
+        request: Request,
+        timeout: int,
+    ) -> FakeResponse:
+        """记录来源并模拟单个 Feed 的失败。"""
+        self.calls.append(request.full_url)
+        if "bad.example" in request.full_url:
+            raise URLError("feed DNS failure")
+        if "missing.example" in request.full_url:
+            raise HTTPError(
+                request.full_url,
+                404,
+                "feed missing",
+                {},
+                None,
+            )
+        return FakeResponse(
+            self.payload,
+        )
 
 
 class FlakyOpener:
@@ -318,6 +353,92 @@ class CollectorTestCase(unittest.TestCase):
         self.assertTrue(items[0].metadata["is_primary"])
         self.assertFalse(items[1].metadata["is_primary"])
 
+    def test_rss_collection_isolates_feed_failure_and_reports_counts(self) -> None:
+        """单个 Feed 失败时应保留其他结果并返回成功/失败明细。"""
+        payload = b"""
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>Healthy update</title>
+              <link>https://example.com/healthy</link>
+              <pubDate>Fri, 21 Nov 2026 08:00:00 GMT</pubDate>
+            </item>
+          </channel>
+        </rss>
+        """
+        opener = RSSFeedOpener(payload)
+        result = RSSCollector(
+            opener=opener,
+            retries=1,
+            sleep_fn=lambda seconds: None,
+        ).collect_with_report(
+            feeds=[
+                {
+                    "name": "Broken Feed",
+                    "url": "https://bad.example/feed.xml",
+                    "category": "software",
+                },
+                {
+                    "name": "Healthy Feed",
+                    "url": "https://good.example/feed.xml",
+                    "category": "software",
+                },
+            ],
+            now=datetime(
+                2026,
+                11,
+                21,
+                12,
+                tzinfo=timezone.utc,
+            ),
+        )
+
+        self.assertEqual(
+            len(result.items),
+            1,
+        )
+        self.assertEqual(
+            result.success_count,
+            1,
+        )
+        self.assertEqual(
+            result.failure_count,
+            1,
+        )
+        self.assertEqual(
+            result.failures[0].source,
+            "Broken Feed",
+        )
+        self.assertIn(
+            "URLError",
+            result.failures[0].reason,
+        )
+
+    def test_rss_permanent_http_error_is_not_retried(self) -> None:
+        """永久性 HTTP 错误不应消耗有限重试次数。"""
+        opener = RSSFeedOpener(b"<rss />")
+        result = RSSCollector(
+            opener=opener,
+            retries=3,
+            sleep_fn=lambda seconds: None,
+        ).collect_with_report(
+            feeds=[
+                {
+                    "name": "Missing Feed",
+                    "url": "https://missing.example/feed.xml",
+                }
+            ]
+        )
+
+        self.assertEqual(
+            len(opener.calls),
+            1,
+        )
+        self.assertEqual(
+            result.failure_count,
+            1,
+        )
+
     def test_github_client_retries_rate_limit(self) -> None:
         """GitHub 429 应按 Retry-After 重试并返回结果。"""
         opener = FlakyOpener()
@@ -402,19 +523,14 @@ class CollectorTestCase(unittest.TestCase):
 
     def test_github_client_reads_project_env_and_process_precedence(self) -> None:
         """GitHub 客户端应读取项目 `.env`，并让进程变量优先。"""
-        project_root = (
-            Path.cwd()
-            / ".test-tmp"
-            / f"github-auth-{uuid.uuid4().hex}"
-        )
-        project_root.mkdir(
-            parents=True,
-            exist_ok=True,
+        project_tempdir = temporary_directory(
+            prefix="daily-intelligence-github-auth-",
         )
         self.addCleanup(
-            shutil.rmtree,
-            project_root,
-            True,
+            project_tempdir.cleanup,
+        )
+        project_root = Path(
+            project_tempdir.name
         )
         (project_root / ".env").write_text(
             "GITHUB_TOKEN='project-token'\n",
@@ -701,6 +817,107 @@ class CollectorTestCase(unittest.TestCase):
             {},
         )
         self.assertEqual(sleeps, [1.0])
+
+    def test_github_network_error_classifies_underlying_reason(self) -> None:
+        """DNS、超时和 TLS 错误应保留脱敏后的诊断类别。"""
+        cases = [
+            (
+                socket.gaierror(
+                    "temporary DNS failure",
+                ),
+                "DNS",
+                "gaierror",
+            ),
+            (
+                TimeoutError("connection timed out"),
+                "timeout",
+                "TimeoutError",
+            ),
+            (
+                ssl.SSLError("certificate verify failed"),
+                "TLS",
+                "SSLError",
+            ),
+        ]
+        fake_token = "ephemeral-network-token"
+        for reason, category, reason_type in cases:
+            with self.subTest(category=category):
+                opener = SequenceOpener(
+                    [
+                        URLError(
+                            reason,
+                        )
+                    ]
+                )
+                with self.assertRaises(GitHubNetworkError) as context:
+                    GitHubClient(
+                        token=fake_token,
+                        opener=opener,
+                        retries=0,
+                    ).get_json("/network-diagnostics")
+                message = str(context.exception)
+                self.assertIn(
+                    category,
+                    message,
+                )
+                self.assertIn(
+                    reason_type,
+                    message,
+                )
+                self.assertNotIn(
+                    fake_token,
+                    message,
+                )
+
+    def test_github_network_error_marks_proxy_without_logging_proxy_url(
+        self,
+    ) -> None:
+        """代理连接失败应只记录代理类别，不暴露代理地址。"""
+        proxy_url = "http://proxy-user:proxy-secret@example.test:8080"
+        opener = SequenceOpener(
+            [
+                URLError(
+                    OSError("proxy connection refused"),
+                )
+            ]
+        )
+        with patch(
+            "daily_intelligence.collectors.github.getproxies",
+            return_value={
+                "https": proxy_url,
+            },
+        ):
+            with self.assertRaises(GitHubNetworkError) as context:
+                GitHubClient(
+                    opener=opener,
+                    retries=0,
+                ).get_json("/proxy-diagnostics")
+
+        message = str(context.exception)
+        self.assertIn(
+            "proxy",
+            message,
+        )
+        self.assertNotIn(
+            proxy_url,
+            message,
+        )
+
+    def test_github_snapshot_date_uses_injected_timezone(self) -> None:
+        """GitHub Star 快照日期应与日报时区共享同一逻辑日期。"""
+        self.assertEqual(
+            GitHubCollector.snapshot_date(
+                "Asia/Shanghai",
+                now=datetime(
+                    2026,
+                    11,
+                    22,
+                    16,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+            "2026-11-23",
+        )
 
     def test_github_client_bounds_rate_limit_retries(self) -> None:
         """最大重试次数应明确且不可因持续 429 无限增长。"""

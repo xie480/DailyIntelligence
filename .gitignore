@@ -21,6 +21,8 @@ env/
 runtime/
 data/
 .test-tmp/
+.daily-intelligence-*-*
+daily-intelligence-*-*/
 *.db
 *.db-shm
 *.db-wal
