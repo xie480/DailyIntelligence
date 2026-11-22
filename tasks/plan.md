@@ -110,3 +110,53 @@ Hermes Skills、Cron 与部署文档
 
 每个阶段先运行聚焦测试，再运行受影响的全量测试并提交本地 Git；提交消息遵循 `类型：中文描述`，不 Push，不修改 Hermes 运行数据。
 
+---
+
+# Hermes `dailyintelligence-creators` Skill 开发计划（2026-11-22）
+
+## 目标
+
+在现有创作者账号服务和 CLI 之上增加一个可交给 Hermes 安装的独立 Skill。Skill 只负责通过受信任的 Hermes 私聊 sender 身份路由账号管理，不复制采集逻辑、不直接访问 SQLite，也不修改 Hermes 运行目录、Profile 或 Gateway。
+
+## 现状与关键决策
+
+- 复用 `python -m daily_intelligence creator ...` 和 `CreatorAccountService`，不新增第二套账号业务逻辑。
+- 为创作者 CLI 增加显式 `--json` 机器接口；保留无 `--json` 的既有人类可读输出，避免无必要的兼容性破坏。
+- Skill 使用 `list` 结果按名称或主页链接解析目标；零匹配或多匹配时先询问用户，多匹配不执行变更；删除始终要求确认。
+- 数据目录和 owner key 由 Hermes 可信运行上下文提供，Skill 不硬编码数据库路径、不接受用户文本中的 owner key。
+- 使用现有 Hermes Skill frontmatter 结构；命令细节放入 `references/commands.md`，避免在 `SKILL.md` 中重复协议。
+
+## 阶段与验收
+
+### 阶段 0：审计、计划和基线
+
+- [x] 阅读项目规范、已有 Skill 示例、账号管理调用链、数据库模型和测试框架。
+- [x] 运行现有 `unittest` 与 `compileall`，记录基线。
+
+### 阶段 1：结构化 Backend CLI 契约
+
+- [ ] 先补充 CLI `--json` 成功、重复、未授权、删除、暂停、恢复和配置用例，并确认新增用例按预期失败。
+- [ ] 复用现有 service 实现结构化 JSON 成功/失败输出和稳定错误码；不直接操作数据库。
+- [ ] 运行聚焦 CLI/creator 测试、全量 unittest 和 compileall，提交 `feat：提供创作者管理 CLI 结构化接口`。
+
+### 阶段 2：Hermes Skill 源文件
+
+- [ ] 新增 `skills/dailyintelligence-creators/SKILL.md` 与 `references/commands.md`。
+- [ ] 明确平台识别、重复处理、列表分组、删除确认、暂停/恢复、监控类型、权限和禁止事项。
+- [ ] 添加 Skill frontmatter/命令一致性静态测试，提交 `feat：新增 DailyIntelligence 创作者 Hermes Skill`。
+
+### 阶段 3：项目文档与收口
+
+- [ ] 更新 README、Hermes 安装说明和现有总入口 Skill 的职责边界，保留“只开发不安装”限制。
+- [ ] 新增本次技术留痕文档，区分已验证的本地 CLI/测试与未验证的 Hermes 真实安装、QQ 入站和平台网络。
+- [ ] 运行完整测试、compileall、隔离数据库 smoke 和 Skill 静态检查，提交 `docs：补充创作者 Skill 安装交接说明`。
+
+## 风险与待验证项
+
+| 风险 | 处理方式 |
+| --- | --- |
+| Hermes 版本的 terminal 参数接口可能变化 | Skill 只引用已确认的 `terminal` 工具概念和仓库已有 frontmatter；安装时按目标版本 help 校验 |
+| YouTube handle/Bilibili 名称解析依赖真实网络 | 本地测试使用 Fake opener；真实平台解析标记为部署后验证 |
+| 首次 owner 自动登记可能被误用 | Skill 必须从 Hermes 入站上下文注入稳定 sender ID；预置白名单由 Backend 校验，用户文本不能覆盖 |
+| 删除/暂停按名称可能多匹配 | Skill 先 list，再要求选择/确认，最终 CLI 只接受精确平台和 account key |
+
