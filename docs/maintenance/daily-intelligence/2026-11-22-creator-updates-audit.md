@@ -85,7 +85,7 @@ report         → RecommendationEngine → DailyReportRenderer → reports/*.md
 
 ## 8. 实际验证结果
 
-- `python -m unittest discover -s tests -q`：102 个测试通过。
+- `python -m unittest discover -s tests -q`：103 个测试通过。
 - `python -m compileall -q daily_intelligence tests`：通过。
 - `python -m daily_intelligence --version` 与 `--help`：通过，帮助中出现 `creator` 命令。
 - CLI 创作者添加/列表、日报整合、Bilibili/YouTube Fixture、失败恢复和报告渲染均有独立测试。
