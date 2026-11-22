@@ -9,7 +9,7 @@ metadata:
   hermes:
     tags: [profile, feedback, preferences, recommendations]
     category: productivity
-    related_skills: [daily-intelligence, github-radar, tech-news-radar]
+    related_skills: [daily-intelligence-local, github-radar, tech-news-radar]
 ---
 
 # Interest Profile
@@ -44,7 +44,7 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" profi
 
 ## 与其他 Skills 的关系
 
-- daily-intelligence 把 Hermes 的自然语言反馈路由到本 Skill。
+- daily-intelligence-local 把 Hermes 的自然语言反馈路由到本 Skill。
 - github-radar 提供仓库标识，便于排除和收藏。
 - tech-news-radar 提供新闻分类，便于调整 AI、Agent、软件开发主题权重。
 

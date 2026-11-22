@@ -62,7 +62,7 @@ if (-not (Test-Path ".env")) {
 
 ~~~~text
 E:\YilenaCode\DailyIntelligence\skills\
-├── daily-intelligence\SKILL.md
+├── daily-intelligence-local\SKILL.md
 ├── github-radar\SKILL.md
 ├── tech-news-radar\SKILL.md
 └── interest-profile\SKILL.md
@@ -76,11 +76,18 @@ Select-String -Path "E:\HermesData\*.yaml","E:\HermesData\profiles\*\*.yaml" -Pa
 
 优先将项目 Skills 目录加入当前 Profile 的 skills.external_dirs。若组织规范不允许外部目录，再把四个子目录复制到目标 Profile 的 skills 目录，并保留源目录作为版本控制副本。复制目标必须通过当前 Hermes Profile 的配置或 help 输出确认。
 
+本地调度 Skill 的精确来源路径是：
+
+`E:\YilenaCode\DailyIntelligence\skills\daily-intelligence-local`
+
+如果当前 Hermes 版本支持按本地来源筛选，使用 `--source local` 和目标 Profile 验证；如果只支持 `skills.external_dirs` 目录级加载，则把项目 `skills` 目录配置为外部目录，并通过本地 Skill 的唯一名称 `daily-intelligence-local` 消除 Hub 冲突。本项目不猜测或修改 Hermes 的 Profile 配置。
+
 确认 Hermes 能看到 Skill：
 
 ~~~~powershell
 hermes skills list
-hermes skill view daily-intelligence
+hermes skills list --source local --enabled-only -p <profile>
+hermes skills inspect daily-intelligence-local
 ~~~~
 
 具体命令以目标 Hermes 版本的 help 输出为准；本项目不自动执行安装。
@@ -133,7 +140,7 @@ hermes cron list
 当前 QQ Bot 已由 Hermes 接入，配置示例包含 qqbot 工具集。Daily Intelligence 不新增 QQ Bot、WebSocket、主动推送或消息 Adapter：
 
 1. 用户在 QQ 私聊中主动询问日报或反馈兴趣。
-2. Hermes 使用当前真实入站消息上下文加载 daily-intelligence Skill。
+2. Hermes 使用当前真实入站消息上下文加载 daily-intelligence-local Skill。
 3. Skill 读取本地日报、SQLite 和画像后生成被动回复。
 4. 不伪造 message_id，不复用过期上下文，不尝试绕过腾讯官方 API v2 的回复限制。
 
@@ -146,7 +153,7 @@ hermes cron list
 ~~~~powershell
 python -m unittest discover -s tests -v
 python -m daily_intelligence --version
-python -m daily_intelligence --data-dir ".test-tmp\manual" dry-run
+python -m daily_intelligence --data-dir "$env:TEMP\daily-intelligence-manual" dry-run
 ~~~~
 
 测试不会向真实 GitHub、RSS、QQ Bot 或 Hermes 发送请求。真实网络、Cron 和 QQ 流程需要部署后单独观察。

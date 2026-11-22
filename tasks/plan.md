@@ -51,7 +51,7 @@ Hermes Skills、Cron 与部署文档
 ### 阶段 4：CLI、Skills 与部署
 
 - 提供 `python -m daily_intelligence` 的初始化、采集、推荐、反馈、画像、日报和 dry-run 命令。
-- 创建 `daily-intelligence`、`github-radar`、`tech-news-radar`、`interest-profile` 四个完整 Skills。
+- 创建 `daily-intelligence-local`、`github-radar`、`tech-news-radar`、`interest-profile` 四个完整 Skills。
 - 编写 README、CHANGELOG、架构说明和 `deployment/HERMES_INSTALL.md`。
 
 ### 阶段 5：收口

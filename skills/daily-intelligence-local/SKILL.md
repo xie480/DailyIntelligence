@@ -1,13 +1,13 @@
 ---
-name: daily-intelligence
-description: 调度 Daily Intelligence 的采集、去重、推荐、日报查询和用户命令处理。
-version: 1.0.0
+name: daily-intelligence-local
+description: 调度本地 Daily Intelligence 的采集、去重、推荐、日报查询和用户命令处理，避免与 Hermes Hub 同名 Skill 冲突。
+version: 1.1.0
 author: Daily Intelligence
 license: MIT
 platforms: [windows, linux, macos]
 metadata:
   hermes:
-    tags: [daily-intelligence, tech-news, github, recommendations, report]
+    tags: [daily-intelligence-local, tech-news, github, recommendations, report]
     category: research
     related_skills: [github-radar, tech-news-radar, interest-profile]
 ---
@@ -72,6 +72,23 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" recom
 - tech-news-radar 负责 RSS/Atom 采集；Hermes Web Search 仍由 Hermes 自身执行。
 - interest-profile 负责画像、显式反馈、隐式信号、收藏和排除。
 - 本 Skill 只做调度和用户交互，不复制上述业务逻辑。
+
+## 验收与 Hermes 集成
+
+本地 Skill 来源路径固定为：
+
+`E:\YilenaCode\DailyIntelligence\skills\daily-intelligence-local`
+
+需要验收项目或接入 Hermes 时，按以下顺序执行：
+
+1. 分层记录证据：静态检查、单元测试、临时数据 smoke、真实网络/API、Cron 运行、QQ 入站/出站分别标记 `PASS`、`PARTIAL`、`FAIL` 或 `BLOCKED`；mock、dry-run 或本地 CLI 成功不能代替网络、调度或消息集成。
+2. 测试优先使用可写的临时数据目录；保留现有数据库、历史日报和运行记录。Windows 权限或临时目录错误先修复测试环境后重跑，不把测试 `setUp` 的 `WinError` 当成业务断言失败。
+3. 真实 GitHub 验证只使用项目自身 `.env` 和只读 endpoint，记录脱敏认证状态与配额；不打印 token、请求头或完整环境变量。网络失败时明确写“未判定”，不把 HTTP 200 或本地 mock 当成认证通过。
+4. 日报验收必须使用同一明确 IANA 时区的逻辑日期；同日流程至少重复两次，并比较报告 hash、推荐/运行/采集副作用。检查报告成功落盘后再写入推荐历史，避免数据库与文件状态分叉。
+5. Hermes 接入先确认实际 serving Profile、gateway 平台绑定、`skills.external_dirs`、本地 Skill 来源、Cron `workdir`/时区/投递方式以及 runs/incidents。存在同名 Skill 时，先用 `hermes skills list --source local --enabled-only -p <profile>` 和精确本地路径确认来源；裸 `hermes skills inspect <name>` 不是本地加载证明。
+6. QQ Bot 若由 Hermes 代发，必须把项目代码、Hermes adapter、入站回复和出站投递分别验收；先生成 dry-run/消息预览，再进行任何真实发送。没有用户确认的目标、时区和时间，不创建主动 QQ 推送。
+
+详细的 Profile、Skill、Cron 和消息集成证据门槛见 `references/acceptance-and-hermes.md`。
 
 ## 错误处理
 

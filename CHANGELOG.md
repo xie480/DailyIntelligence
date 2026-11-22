@@ -6,7 +6,7 @@
 
 - 提供 Python 标准库实现的 SQLite、GitHub、RSS/Atom、去重、画像、推荐和日报模块。
 - 提供 python -m daily_intelligence CLI，覆盖初始化、采集、推荐、反馈、画像、日报和 dry-run。
-- 提供 daily-intelligence、github-radar、tech-news-radar、interest-profile 四个 Hermes Skills。
+- 提供 daily-intelligence-local、github-radar、tech-news-radar、interest-profile 四个 Hermes Skills；本地调度 Skill 与 Hermes Hub 同名项隔离。
 - 提供采集源模板、用户画像模板、架构说明和 Hermes 安装/回滚说明。
 - 使用 unittest 覆盖 URL、指纹、相似度、仓库识别、Star 增长、历史去重、反馈、画像、日报、CLI 和运行保护。
 

@@ -58,7 +58,7 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" recom
 离线检查日报渲染，不访问网络或写运行数据：
 
 ~~~~powershell
-python -m daily_intelligence --data-dir ".test-tmp\manual" dry-run
+python -m daily_intelligence --data-dir "$env:TEMP\daily-intelligence-manual" dry-run
 ~~~~
 
 ## CLI 命令
@@ -108,7 +108,7 @@ python -m unittest discover -s tests -v
 
 ## Hermes 使用方式
 
-将 skills/ 作为 Hermes 外部只读 Skills 目录，或按 deployment/HERMES_INSTALL.md 复制到目标 Profile 的 Skills 目录。日报 Cron 只执行采集、推荐和保存；QQ Bot 用户主动提问时由 daily-intelligence Skill 读取日报和数据库后被动回复。
+将 `E:\YilenaCode\DailyIntelligence\skills\daily-intelligence-local` 及其他三个 Skill 作为 Hermes 外部只读 Skills 目录，或按 deployment/HERMES_INSTALL.md 复制到目标 Profile 的 Skills 目录。日报 Cron 只执行采集、推荐和保存；QQ Bot 用户主动提问时由 `daily-intelligence-local` Skill 读取日报和数据库后被动回复。
 
 完整模块边界、数据流和未验证项见 docs/architecture.md。
 

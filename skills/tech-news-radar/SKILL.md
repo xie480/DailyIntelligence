@@ -9,7 +9,7 @@ metadata:
   hermes:
     tags: [rss, atom, ai-news, agent-news, software-development]
     category: research
-    related_skills: [daily-intelligence, github-radar]
+    related_skills: [daily-intelligence-local, github-radar]
 ---
 
 # Tech News Radar
@@ -27,7 +27,7 @@ metadata:
 3. 只把最近 24 小时标记为主新闻，7 天内较旧条目标记为补充；没有发布时间不伪造时间。
 4. 使用 URL、内容指纹和标题相似度合并转载，metadata.related_sources 保存关联来源。
 5. 以 ai、agent、software 分类交给推荐和日报模块。
-6. 对 RSS 不覆盖的主题，可由 Hermes Web Search 查询官方博客、公告或 GitHub Release，再由 daily-intelligence 决定是否记录。
+6. 对 RSS 不覆盖的主题，可由 Hermes Web Search 查询官方博客、公告或 GitHub Release，再由 daily-intelligence-local 决定是否记录。
 
 ## 输入与输出
 
@@ -39,7 +39,7 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" colle
 
 ## 与其他 Skills 的关系
 
-- daily-intelligence 负责日报分区、推荐和用户问答。
+- daily-intelligence-local 负责日报分区、推荐和用户问答。
 - github-radar 负责项目与 Release，不把同一 Release 作为两条新闻重复展示。
 - interest-profile 负责“最近少看模型发布新闻”等反馈。
 

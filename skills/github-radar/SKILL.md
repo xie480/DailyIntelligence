@@ -9,7 +9,7 @@ metadata:
   hermes:
     tags: [github, open-source, releases, stars, ai-agent]
     category: research
-    related_skills: [daily-intelligence, interest-profile]
+    related_skills: [daily-intelligence-local, interest-profile]
 ---
 
 # GitHub Radar
@@ -44,7 +44,7 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" colle
 
 ## 与其他 Skills 的关系
 
-- daily-intelligence 负责调度和面向用户的回答。
+- daily-intelligence-local 负责调度和面向用户的回答。
 - interest-profile 负责项目喜欢、排除和兴趣匹配。
 - tech-news-radar 不重复采集 GitHub Release；Release 作为 GitHub 项目的 metadata。
 
