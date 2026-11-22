@@ -1,7 +1,7 @@
 ---
 name: daily-intelligence-local
 description: 调度本地 Daily Intelligence 的采集、去重、推荐、日报查询和用户命令处理，避免与 Hermes Hub 同名 Skill 冲突。
-version: 1.1.0
+version: 1.2.0
 author: Daily Intelligence
 license: MIT
 platforms: [windows, linux, macos]
@@ -44,10 +44,11 @@ metadata:
 
 ## 幂等与数据一致性
 
-- 同一逻辑日期重复执行 `report` 或 Cron 必须保持幂等：日报内容可以复用，但推荐历史、运行记录和其他可观察副作用不能无故重复增长。
+- 把同日 `report --no-record` 与普通 `report`/Cron 作为两类独立验收：前者必须不改变 SQLite 计数和报告 hash；后者也必须重复执行并记录实际副作用，不能用 `--no-record` 的通过替代普通写入路径的结论。
+- 普通 `report` 的 item-level `report_date` 去重不等于整份日报幂等；推荐冷却可能让第二次运行挑选下一批项目。若产品契约要求同日普通 report 完全幂等，应把报告内容或推荐计数变化判为风险/失败，而不是只检查是否出现重复 item_id。
 - 只为实际写入日报板块的项目记录“已推荐”；被时间窗口、板块限额或去重规则过滤掉的补充项不得伪装成已展示推荐。
 - 部署或修复后至少重复执行一次同日流程，并同时比较日报内容/hash 与 SQLite 中的推荐、运行和采集记录；只看命令返回成功不足以证明幂等。
-- 日报为空时保留真实原因（无合格来源、采集失败或窗口过滤），不得用推荐历史或占位条目制造“有内容”的假象。
+- 日报为空时保留真实原因（无合格来源、采集失败、日期窗口或推荐排序过滤），不得用推荐历史或占位条目制造“有内容”的假象。
 
 ## Python 调用
 
@@ -83,12 +84,13 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" recom
 
 1. 分层记录证据：静态检查、单元测试、临时数据 smoke、真实网络/API、Cron 运行、QQ 入站/出站分别标记 `PASS`、`PARTIAL`、`FAIL` 或 `BLOCKED`；mock、dry-run 或本地 CLI 成功不能代替网络、调度或消息集成。
 2. 测试优先使用可写的临时数据目录；保留现有数据库、历史日报和运行记录。Windows 权限或临时目录错误先修复测试环境后重跑，不把测试 `setUp` 的 `WinError` 当成业务断言失败。
-3. 真实 GitHub 验证只使用项目自身 `.env` 和只读 endpoint，记录脱敏认证状态与配额；不打印 token、请求头或完整环境变量。网络失败时明确写“未判定”，不把 HTTP 200 或本地 mock 当成认证通过。
-4. 日报验收必须使用同一明确 IANA 时区的逻辑日期；同日流程至少重复两次，并比较报告 hash、推荐/运行/采集副作用。检查报告成功落盘后再写入推荐历史，避免数据库与文件状态分叉。
-5. Hermes 接入先确认实际 serving Profile、gateway 平台绑定、`skills.external_dirs`、本地 Skill 来源、Cron `workdir`/时区/投递方式以及 runs/incidents。存在同名 Skill 时，先用 `hermes skills list --source local --enabled-only -p <profile>` 和精确本地路径确认来源；裸 `hermes skills inspect <name>` 不是本地加载证明。
-6. QQ Bot 若由 Hermes 代发，必须把项目代码、Hermes adapter、入站回复和出站投递分别验收；先生成 dry-run/消息预览，再进行任何真实发送。没有用户确认的目标、时区和时间，不创建主动 QQ 推送。
+3. 真实 GitHub 验证只使用项目自身 `.env` 和只读 endpoint；优先用 `load_project_settings(project_root, environ={})` 与 `GitHubClient(project_root=project_root, environ={}, retries=0)`，记录脱敏认证状态、代理来源和配额，不打印 token、请求头或完整环境变量。网络失败时明确写“未判定”，不把 HTTP 200 或本地 mock 当成认证通过。
+4. 日报验收必须使用同一明确 IANA 时区的逻辑日期；分别重复执行 `report --no-record` 和普通 `report`/Cron，两次都比较报告 hash、推荐/运行/采集副作用；检查报告成功落盘后再写入推荐历史，避免数据库与文件状态分叉。
+5. Hermes 接入先确认实际 serving Profile、gateway 平台绑定、`skills.external_dirs`、本地 Skill 来源、Cron `workdir`/时区/投递方式以及 runs/incidents。把 Cron 配置中的 Skill 名称与当前 enabled-local 名称逐字比较；存在同名或过时裸名称时，先用 `hermes skills list --source local --enabled-only -p <profile>` 和精确本地路径确认来源；裸 `hermes skills inspect <name>` 不是本地加载证明。
+6. 分开判断调度器健康和业务成功：`cron doctor`、job 状态为 ok 只能证明调度/Agent 过程完成，还要读取 Cron 输出和项目 SQLite `runs`，确认每个采集阶段的真实结果。
+7. QQ Bot 若由 Hermes 代发，必须把项目代码、Hermes adapter、入站回复和出站投递分别验收；同时检查 `hermes send --list qqbot` 的 channel discovery 和可用工具。已配置或已连接的 adapter 不等于真实投递；先生成 dry-run/消息预览，再进行任何真实发送。没有用户确认的目标、时区和时间，不创建主动 QQ 推送。
 
-详细的 Profile、Skill、Cron 和消息集成证据门槛见 `references/acceptance-and-hermes.md`。
+详细的 Profile、Skill、Cron、幂等和消息集成证据门槛见 `references/acceptance-and-hermes.md`。
 
 ## 错误处理
 

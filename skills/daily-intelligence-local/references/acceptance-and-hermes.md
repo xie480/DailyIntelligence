@@ -28,13 +28,20 @@ Never collapse these levels into a single “integration passed” result.
 4. Inspect `hermes cron list`, `hermes cron status`, `hermes cron doctor`, `hermes cron runs`, and `hermes cron incidents`. Confirm explicit `workdir`, IANA timezone, required Skills, and `local` delivery for report-generation jobs.
 5. Keep project runtime data outside the source repository when configured that way. Never delete the existing database or historical reports to make a test pass.
 
+## Cross-checking local Skills, Cron, and delivery
+
+- Compare the exact Skill names in `hermes cron list`/the profile Cron job definition with `hermes skills list --source local --enabled-only -p <profile>`. A job can finish with scheduler status `ok` while referencing a stale bare name that is absent locally and resolves to a Hub candidate.
+- Read the Cron output and the project's `runs` table after each acceptance run. `cron doctor` and a completed Agent response do not prove that GitHub, RSS, report persistence, or downstream delivery succeeded.
+- Record `hermes send --list qqbot` before any delivery claim. “Configured” or a connected WebSocket proves transport/configuration only; an empty channel discovery and an unapproved target keep proactive delivery unverified.
+
 ## Safe API and CLI checks
 
-- Load GitHub credentials through the project's own configuration path; never put a token in a command-line argument.
-- Use only read endpoints for acceptance (`rate_limit`, repository search, repository metadata and release metadata). Report whether the client loaded a token and whether the request reached the API; never print secrets, headers or full environment variables.
+- Load GitHub credentials through the project's own configuration path; for a controlled environment test use `load_project_settings(project_root, environ={})` and `GitHubClient(project_root=project_root, environ={}, retries=0)`. Never put a token in a command-line argument.
+- Use only read endpoints for acceptance (`rate_limit`, repository search, repository metadata and release metadata). Report whether the client loaded a token and whether the request reached the API; never print secrets, headers or full environment variables. If generic `HTTP(S)_PROXY` values are injected for a precedence test, assert that the intended project-level proxy still wins without changing machine-wide settings.
 - Run the canonical unit suite from a writable temporary location. If setup fails with an OS permission error, repair the test environment or choose another writable temp directory and rerun before judging assertions.
-- Use a disposable data directory for CLI smoke tests. For idempotency, run the same logical date twice and compare report content/hash plus SQLite recommendation, run and collection side effects.
+- Use a disposable data directory for CLI smoke tests. Run the same logical date twice for both `--no-record` and ordinary recording paths; compare report content/hash plus SQLite recommendation, run and collection side effects because item-level deduplication may still allow a recording rerun to select a new batch.
 - Verify the report's logical date comes from the same explicit timezone used by collection and Cron. A local `date.today()` mixed with an explicit IANA timezone can cross a midnight boundary and label the report incorrectly.
+- When the source configuration has no feed for a requested category, report collection success separately from section population; an empty Agent/AI/software section can come from source coverage, date windows, or ranking filters and must not be mislabeled as a transport failure.
 - Do not call a report-generation command successful when it records recommendation history before the report file is durably saved; that ordering can leave database history without a deliverable report.
 
 ## QQ boundary
@@ -46,4 +53,4 @@ When QQ Bot is supplied by Hermes rather than project code, validate the layers 
 3. the adapter handles passive reply, message length/chunking, rate limits and deduplication;
 4. proactive delivery is separately authorized with a confirmed target, schedule and timezone.
 
-A configured QQ adapter or a successful local Cron run is not evidence that a real user message was answered. Do not send a real test message until the preview is approved.
+A configured QQ adapter, a connected WebSocket, or a successful local Cron run is not evidence that a real user message was answered or that proactive delivery works. Check channel discovery and the actual `hermes send` target path, then obtain approval for the target, schedule, timezone, and message preview before sending a real test message.
