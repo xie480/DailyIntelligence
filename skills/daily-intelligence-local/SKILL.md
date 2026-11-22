@@ -1,7 +1,7 @@
 ---
 name: daily-intelligence-local
 description: 调度本地 Daily Intelligence 的采集、去重、推荐、日报查询和用户命令处理，避免与 Hermes Hub 同名 Skill 冲突。
-version: 1.5.0
+version: 1.6.0
 author: Daily Intelligence
 license: MIT
 platforms: [windows, linux, macos]
@@ -34,10 +34,11 @@ metadata:
 8. 运行 `report` 时由 Daily Intelligence 在任务启动时固定 `window_end`，按账号和内容类型采集 Bilibili 视频、Bilibili 动态和 YouTube Atom Feed；先保存事件，主报告和 QQ Markdown 都成功后才推进检查点。
 9. 通过 DailyReportRenderer 生成并保存当天 Markdown 日报和 QQ Markdown 阅读版，创作者章节与原有日报合并，不创建第二份日报。
 10. 用户手动要求“生成今天的日报”时，必须使用 `report --json` 获取本次执行结果，检查 `ok`，并直接使用返回的 `qq_report_path`；不得按当前日期自行拼接路径，也不得再次运行生成流程。
-11. 使用 `read-report --path "<qq_report_path>" --json` 以 UTF-8 读取完整正文。必须检查 `ok`、`content` 非空、`char_count` 与 `message_count`，并使用返回的 `messages` 数组逐条发送；不能只读取开头、重新总结、删减章节或丢弃 `partial` 状态、创作者动态和链接。
-12. 通过当前入站 QQ 会话的被动回复通道连续输出消息。将“今日日报已生成，以下是完整日报正文：”作为首段前缀拼接到 `messages[0]`，随后按原顺序输出完整日报正文，不重新生成或重复输出执行摘要；不要单独发送一个没有日期/序号的提示消息。首条和每条分段已经包含日报日期与“第 x/y 部分”，最后一条包含“日报发送完成。”；若任一段发送失败，明确报告失败段序号和 `qq_report_path`，保留文件供重试。
-13. Hermes Cron 仍只执行采集、交接和日报落盘，不因本次手动回复增加第二个定时任务或主动推送渠道；同一生成结果只允许一个交付渠道。
-14. 回复用户时只引用数据库或日报中的来源链接；没有来源就说明信息未验证。
+11. 使用 `read-report --path "<qq_report_path>" --json` 以 UTF-8 读取完整正文。必须检查 `ok`、`content` 非空、`char_count` 与 `message_count`；返回的 `content` 和 `messages` 只能作为事实底稿，不能直接转发 Markdown 原文。
+12. 发送前必须按 `references/report-polishing.md` 对每个分段做中文语义润色：去掉 Markdown 表达，翻译说明性英文，调整断句和标点，输出手机可读的纯文本；不得重新总结、删减章节、调换顺序、改写数字、删除链接或丢弃 `partial` 状态、创作者动态和来源信息。
+13. 通过当前入站 QQ 会话的被动回复通道连续输出润色后的消息。将“今日日报已生成，以下是完整日报正文：”作为首段前缀拼接到第一段润色结果，随后按原顺序输出；不要单独发送一个没有日期/序号的提示消息。首条和每条分段保留日报日期与“第 x/y 部分”，最后一条保留“日报发送完成。”；润色后重新检查消息长度，超限时只在章节或完整条目之间继续分段，不能截断正文，也不重新生成日报。
+14. Hermes Cron 仍只执行采集、交接和日报落盘，不因本次手动回复增加第二个定时任务或主动推送渠道；同一生成结果只允许一个交付渠道。
+15. 回复用户时只引用数据库或日报中的来源链接；没有来源就说明信息未验证。
 
 ## 创作者账号管理边界
 
@@ -67,7 +68,7 @@ python -m daily_intelligence --data-dir "<data_dir>" report --json
 python -m daily_intelligence read-report --path "<qq_report_path>" --json
 ~~~~
 
-第一条命令的 JSON 是本次任务的唯一状态来源。只有 `ok: true` 且存在 `qq_report_path` 才能继续；第二条命令返回完整 `content` 和按 QQ 长度拆好的 `messages`。将 `messages` 原样按顺序交给当前 QQ 会话发送，不能把 `report_path`、日期或旧日报路径当作本次正文来源。读取失败、正文为空或消息发送失败时，返回实际错误和文件路径，不得反馈“日报已发送”。
+第一条命令的 JSON 是本次任务的唯一状态来源。只有 `ok: true` 且存在 `qq_report_path` 才能继续；第二条命令返回完整 `content` 和按 QQ 长度拆好的 `messages`。将 `messages` 作为语义润色输入，按 `references/report-polishing.md` 转成纯文本后再按顺序交给当前 QQ 会话发送，不能把 `report_path`、日期或旧日报路径当作本次正文来源。读取失败、润色失败、正文为空或消息发送失败时，返回实际错误和文件路径，不得反馈“日报已发送”。
 
 `search_status` 必须区分 `success`、`empty`、`unavailable`、`network_error`、`page_unavailable`、`time_unverified`、`low_confidence` 和实现支持的 `partial`。一个领域失败时继续处理其他领域，日报状态区必须保留失败原因。时间字段只写原文明确给出的粒度；只有日期就保留日期，无法核实时用 `null` 并标记 `time_unverified`，不得把搜索时间或抓取时间当作发布时间。
 
@@ -84,6 +85,21 @@ python -m daily_intelligence read-report --path "<qq_report_path>" --json
 | 查看更多项目或新闻 | 读取数据库中未展示且未排除的条目 |
 | 修改兴趣偏好 | 调用 interest-profile 的 `feedback` 或 `query` CLI |
 
+## 日报发送前语义润色
+
+`read-report` 返回的 Markdown 是可追溯的事实底稿，不是面向手机用户的最终消息。手动 QQ 回复必须先执行语义润色，再发送纯文本；不得把原始 `.qq.md`、JSON 或带三反引号的代码块直接交给 QQ Adapter。
+
+润色只允许改变表达层：
+
+- 删除 `#`、`##`、`###`、`**`、`*`、反引号、引用符和 Markdown 链接语法；标题改成独立的普通文本行，列表改成 `•` 等纯文本项目符号。
+- 将说明性英文和状态标签翻成自然中文；`GitHub`、`Bilibili`、`YouTube`、`MCP`、仓库名、账号名、命令、代码标识符和 URL 保持原样。`partial` 等机器状态可以写成中文释义并在括号中保留原状态词。
+- 调整中文语序、断句、标点和冗余空格，让手机阅读自然；链接改成“来源：标题（URL）”等纯文本形式，但 URL 字符串必须逐字保留。
+- 代码示例去掉围栏和 Markdown 标记，只保留代码文本并可加“代码：”提示；不得执行、翻译或改写代码。
+
+以下内容必须逐项保持不变：日报日期、分段序号、一级/二级/三级章节顺序、每个项目和新闻条目、数值和时间、来源链接、采集状态、`partial`、B站/YouTube 创作者动态以及报告中的重要提示。禁止新增事实、合并条目、重排内容、只保留摘要或把失败状态润色成成功。
+
+润色完成后逐段检查：不含 Markdown 围栏或链接语法，保留必要标题和列表层次，所有链接仍可点击，消息顺序与原始 `messages` 一致，长度符合 QQ 限制。详细规则和示例见 `references/report-polishing.md`。
+
 主动查询主题可记录为结构化信号，不保存完整聊天原文：
 
 ~~~~powershell
@@ -94,7 +110,7 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" query
 
 输入包括用户自然语言、可选项目目标、运行数据目录和 sources.json。输出可以是：
 
-- 面向用户的简洁 Markdown 摘要。
+- 面向用户的中文纯文本语义润色日报（Markdown 只作为内部事实底稿）。
 - reports/YYYY-MM-DD.md 文件路径。
 - CLI 的 JSON 推荐列表。
 - 画像状态和反馈解析结果。

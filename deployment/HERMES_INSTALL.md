@@ -143,7 +143,7 @@ $generation = python -m daily_intelligence --data-dir "E:\HermesData\daily-intel
 python -m daily_intelligence read-report --path "<qq_report_path>" --json
 ~~~~
 
-`read-report` 会用 UTF-8 完整读回本次 `.qq.md`，返回原始 `content`、字符数和按 QQ 长度拆好的 `messages`。Hermes 应将“今日日报已生成，以下是完整日报正文：”拼接到第一段，再按数组顺序通过当前入站会话发送这些消息；不要单独发送一个提示消息。正文必须保留日期、章节、链接、`partial` 状态和创作者动态；最后一段带有“日报发送完成。”。生成失败、路径缺失、读取失败、正文为空或某段发送失败时，只报告实际错误和文件路径，不把文件落盘当作用户已收到，也不重新运行生成程序。
+`read-report` 会用 UTF-8 完整读回本次 `.qq.md`，返回原始 `content`、字符数和按 QQ 长度拆好的 `messages`。这些内容只作为事实底稿，Hermes 必须先按 `skills/daily-intelligence-local/references/report-polishing.md` 去掉 Markdown 表达、翻译说明性英文并润色为手机纯文本，再将“今日日报已生成，以下是完整日报正文：”拼接到第一段，按数组顺序通过当前入站会话发送；不要直接发送 Markdown 原文，也不要单独发送提示消息。正文必须保留日期、章节、链接、`partial` 状态和创作者动态；最后一段带有“日报发送完成。”。生成失败、路径缺失、读取失败、润色失败、正文为空或某段发送失败时，只报告实际错误和文件路径，不把文件落盘当作用户已收到，也不重新运行生成程序。
 
 ## 6. 数据库初始化命令
 
@@ -183,7 +183,7 @@ hermes cron list
 
 1. 用户在 QQ 私聊中主动询问日报或反馈兴趣。
 2. Hermes 使用当前真实入站消息上下文加载 daily-intelligence-local Skill。
-3. 用户要求生成日报时，Skill 调用 `report --json`，再用返回的 `qq_report_path` 调用 `read-report --json`，把完整 `messages` 按顺序作为当前会话的被动回复。
+3. 用户要求生成日报时，Skill 调用 `report --json`，再用返回的 `qq_report_path` 调用 `read-report --json`，将完整 `messages` 作为事实底稿润色为手机纯文本后，按顺序作为当前会话的被动回复。
 4. 不伪造 message_id，不复用过期上下文，不尝试绕过腾讯官方 API v2 的回复限制。
 
 如果目标环境的入站消息不能交给 Hermes，先检查 Hermes qqbot 平台和 Profile toolset；不要在本项目内重写 QQ 路由。
@@ -196,7 +196,7 @@ hermes cron list
 
 - 生成 `reports/YYYY-MM-DD.qq.md` 完整阅读版。
 - 用 `read-report` 读取本次生成路径对应的完整正文。
-- 按 `##`/`###` 章节和完整项目/新闻条目拆分消息，保留日期、原始链接、代码块和创作者状态。
+- 发送前按语义润色规则去掉 Markdown 表达、翻译说明性英文；仍按 `##`/`###` 章节和完整项目/新闻条目顺序输出，保留日期、原始链接、代码内容和创作者状态。
 - 最后一段标明“日报发送完成。”；发送失败时返回段序号和文件路径。
 - 提供本地附件文件，等待 Hermes adapter 按官方媒体上传机制处理。
 

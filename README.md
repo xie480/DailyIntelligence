@@ -103,7 +103,7 @@ python -m daily_intelligence --data-dir "$env:TEMP\daily-intelligence-manual" dr
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" --timezone "Asia/Shanghai" report
 ~~~~
 
-手动触发日报时，Hermes 必须先执行 `report --json`，再把 JSON 返回的 `qq_report_path` 原样传给 `read-report --path ... --json`。读取命令会完整读回 UTF-8 正文，并按消息上限返回有日期、连续序号和完成标记的 `messages`；不得按日期猜路径、重新生成日报或只发送执行摘要。
+手动触发日报时，Hermes 必须先执行 `report --json`，再把 JSON 返回的 `qq_report_path` 原样传给 `read-report --path ... --json`。读取命令会完整读回 UTF-8 正文，并按消息上限返回有日期、连续序号和完成标记的 `messages`；这些内容是润色底稿，必须依照 `skills/daily-intelligence-local/references/report-polishing.md` 去掉 Markdown 表达、翻译说明性英文并转成手机纯文本后再发送。不得按日期猜路径、重新生成日报、直接发送 Markdown 原文或只发送执行摘要。
 
 创作者管理命令由 `dailyintelligence-creators` Skill 通过 Hermes 传入当前私聊的真实 sender ID。没有预置授权时，首次创作者管理请求会自动登记该 sender ID；后续请求必须使用同一个 ID。Skill 使用 `creator --json` 获取结构化成功/失败结果：
 
@@ -154,7 +154,7 @@ python -m unittest discover -s tests -v
 
 ## Hermes 使用方式
 
-将 `E:\YilenaCode\DailyIntelligence\skills` 下的 `daily-intelligence-local`、`dailyintelligence-creators` 及其他 Skill 作为 Hermes 外部只读 Skills 目录，或按 deployment/HERMES_INSTALL.md 复制到目标 Profile 的 Skills 目录。完整日报流程由 `daily-intelligence-local` 编排：先运行 GitHub/RSS 采集，再让 Hermes 用 `web_search` 覆盖三个新闻领域、用 `web_extract` 核实原文，写入交接 JSON，执行 `import-handoff` 后运行 `report`。`report` 会在同一任务内按账号和内容类型采集创作者更新，最后生成完整和 QQ Markdown 日报。用户手动发送“生成今天的日报”时，Skill 继续使用本次 `report --json` 返回的 `qq_report_path` 读取完整 QQ 正文，并在当前被动 QQ 会话中按 `messages` 顺序输出；不会重复生成或重复推送。QQ Bot 用户的创作者账号管理由 `dailyintelligence-creators` 负责，日报查询仍由 `daily-intelligence-local` 负责。
+将 `E:\YilenaCode\DailyIntelligence\skills` 下的 `daily-intelligence-local`、`dailyintelligence-creators` 及其他 Skill 作为 Hermes 外部只读 Skills 目录，或按 deployment/HERMES_INSTALL.md 复制到目标 Profile 的 Skills 目录。完整日报流程由 `daily-intelligence-local` 编排：先运行 GitHub/RSS 采集，再让 Hermes 用 `web_search` 覆盖三个新闻领域、用 `web_extract` 核实原文，写入交接 JSON，执行 `import-handoff` 后运行 `report`。`report` 会在同一任务内按账号和内容类型采集创作者更新，最后生成完整和 QQ Markdown 日报。用户手动发送“生成今天的日报”时，Skill 继续使用本次 `report --json` 返回的 `qq_report_path` 读取完整 QQ 正文，再按语义润色规则去掉 Markdown 表达、翻译说明性英文并在当前被动 QQ 会话中输出手机纯文本；不会重复生成、直接转发 Markdown 或重复推送。QQ Bot 用户的创作者账号管理由 `dailyintelligence-creators` 负责，日报查询仍由 `daily-intelligence-local` 负责。
 
 本次交付只保留 Skill 源文件和调用文档，不安装到 Hermes 实际运行目录，不修改 Hermes Profile，不重启 Gateway。
 

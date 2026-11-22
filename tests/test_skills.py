@@ -96,11 +96,42 @@ class SkillLayoutTestCase(unittest.TestCase):
             "不重新生成",
             "日报发送完成",
             "发送失败",
+            "语义润色",
+            "不能直接转发 Markdown 原文",
+            "手机可读的纯文本",
+            "保留日报日期",
+            "不能截断正文",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(
                     phrase,
                     local_text,
+                )
+
+        polishing_path = (
+            root
+            / "skills"
+            / "daily-intelligence-local"
+            / "references"
+            / "report-polishing.md"
+        )
+        self.assertTrue(
+            polishing_path.is_file(),
+        )
+        polishing_text = polishing_path.read_text(
+            encoding="utf-8",
+        )
+        for phrase in (
+            "不得直接发送 `.qq.md`",
+            "URL 必须逐字保留",
+            "必须保持的内容",
+            "不含三反引号",
+            "日报发送完成",
+        ):
+            with self.subTest(polishing_phrase=phrase):
+                self.assertIn(
+                    phrase,
+                    polishing_text,
                 )
         for phrase in (
             "至少两组",

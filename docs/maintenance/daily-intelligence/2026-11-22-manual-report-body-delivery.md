@@ -30,7 +30,7 @@ Python CLI 已经同时原子保存完整 Markdown 和 QQ Markdown，且 `daily_
 2. 新增 `read-report --path PATH --json`（兼容别名 `read-qq-report`）。它只读取调用方传入的 `.qq.md`，使用 UTF-8 一次性读完整文件，拒绝空正文，并返回原始 `content`、字符数和 `messages`。
 3. 消息拆分按二级/三级标题和完整行边界执行，代码块不在中间断开，原始链接不截断。每段携带 `DailyIntelligence YYYY-MM-DD` 和 `第 x/y 部分`，最后一段带“日报发送完成。”。
 4. 手动 Skill 流程严格使用 `report --json` 返回的 `qq_report_path`，随后调用 `read-report`，按 `messages` 顺序交给当前入站 QQ 会话。Cron 仍只保存报告，不新增主动推送任务，避免同一报告重复投递。
-5. 用户提示语拼接到第一段消息，不单独占用一个没有日期和序号的 QQ 消息；日报正文仍按返回的分段原样顺序发送。
+5. 用户提示语拼接到第一段消息，不单独占用一个没有日期和序号的 QQ 消息；日报正文先按语义润色规则转成纯文本，再按返回的分段顺序发送。
 
 ## 异常处理
 

@@ -61,7 +61,8 @@ For a user message such as “生成今天的日报”, the passive reply flow i
 
 1. Run `report --json` once and require `ok: true`.
 2. Read the returned `qq_report_path` with `read-report --path "<qq_report_path>" --json`.
-3. Require non-empty UTF-8 `content`, prefix `messages[0]` with “今日日报已生成，以下是完整日报正文：”, and send the resulting `messages` in order through the current inbound QQ conversation. Do not send the prefix as a separate message.
-4. Do not derive a filename from the date, rerun generation, or treat file creation as delivery. If reading or sending fails, report the failed stage/part and keep the returned path for retry.
+3. Treat `content` and `messages` as the factual source only. Apply `references/report-polishing.md` to every message: remove Markdown presentation, translate explanatory English into natural Chinese, and keep links, statuses, numbers, chapters and item order unchanged.
+4. Prefix the polished first message with “今日日报已生成，以下是完整日报正文：” and send the resulting plain-text messages in order through the current inbound QQ conversation. Do not send raw Markdown or the prefix as a separate message.
+5. Do not derive a filename from the date, rerun generation, or treat file creation as delivery. If reading, polishing or sending fails, report the failed stage/part and keep the returned path for retry.
 
-The local splitter preserves section boundaries, complete links, fenced code blocks and `partial` source states. Cron remains local report generation and does not create a second delivery channel.
+The local splitter preserves section boundaries, complete links, fenced code blocks and `partial` source states before polishing. The polishing step removes only presentation syntax and does not create a second delivery channel. Cron remains local report generation.
