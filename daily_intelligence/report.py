@@ -25,6 +25,11 @@ SECTION_LABELS = {
     "agent": "Agent",
     "software": "软件开发",
 }
+CREATOR_SECTION_DEFINITIONS = (
+    ("bilibili", "video", "今日 B站新视频"),
+    ("bilibili", "dynamic", "今日 B站新动态"),
+    ("youtube", "video", "今日 YouTube 新视频"),
+)
 QQ_DEFAULT_MAX_CHARS = 3500
 
 
@@ -103,6 +108,8 @@ class DailyReportRenderer:
         timezone_name: str = DEFAULT_TIMEZONE,
         now: datetime | None = None,
         collection_status: dict[str, Any] | None = None,
+        creator_updates: Iterable[dict[str, Any]] | None = None,
+        creator_status: dict[str, Any] | None = None,
     ) -> str:
         """渲染摘要、项目、新闻、重点推荐和数据来源状态。"""
         current_date = report_date or date_in_timezone(
@@ -156,6 +163,12 @@ class DailyReportRenderer:
                         index,
                     )
                 )
+        output.extend(
+            self._render_creator_updates(
+                creator_updates or [],
+                creator_status or status.get("creator_updates") or {},
+            )
+        )
         output.append("## 今日重点推荐")
         output.append("")
         output.extend(
@@ -170,6 +183,7 @@ class DailyReportRenderer:
             self._render_collection_status(
                 rendered_items,
                 status,
+                creator_status or status.get("creator_updates") or {},
             )
         )
         return "\n".join(output).rstrip() + "\n"
@@ -182,6 +196,8 @@ class DailyReportRenderer:
         timezone_name: str = DEFAULT_TIMEZONE,
         now: datetime | None = None,
         collection_status: dict[str, Any] | None = None,
+        creator_updates: Iterable[dict[str, Any]] | None = None,
+        creator_status: dict[str, Any] | None = None,
     ) -> str:
         """生成保留详细项目、新闻和链接的 QQ Markdown 版本。"""
         markdown = self.render(
@@ -191,6 +207,8 @@ class DailyReportRenderer:
             timezone_name=timezone_name,
             now=now,
             collection_status=collection_status,
+            creator_updates=creator_updates,
+            creator_status=creator_status,
         )
         lines = markdown.splitlines()
         if lines:
@@ -412,6 +430,7 @@ class DailyReportRenderer:
         self,
         items: list[dict[str, Any]],
         status: dict[str, Any],
+        creator_status: dict[str, Any] | None = None,
     ) -> list[str]:
         """渲染来源状态和轻量质量指标，明确区分未执行与无结果。"""
         search_status = status.get("search_status") or {}
@@ -461,7 +480,156 @@ class DailyReportRenderer:
                     f"{SECTION_LABELS[category]} 查询："
                     f"{len(queries[category])} 组"
                 )
+        creator = creator_status or {}
+        if creator:
+            lines.extend(
+                [
+                    "",
+                    "创作者动态："
+                    f"{creator.get('status') or 'not_run'}，"
+                    f"展示 {creator.get('event_count', 0)} 条。",
+                ]
+            )
+            for failure in creator.get("failures") or []:
+                lines.append(
+                    "- "
+                    f"{failure.get('platform') or 'unknown'} "
+                    f"{failure.get('content_type') or 'source'}："
+                    f"{failure.get('error') or '采集失败'}"
+                )
         lines.append("")
+        return lines
+
+    def _render_creator_updates(
+        self,
+        updates: Iterable[dict[str, Any]],
+        status: dict[str, Any],
+    ) -> list[str]:
+        """渲染 Bilibili 视频/动态和 YouTube 视频独立章节。"""
+        grouped: dict[tuple[str, str], list[dict[str, Any]]] = {
+            (
+                platform,
+                content_type,
+            ): []
+            for platform, content_type, _ in CREATOR_SECTION_DEFINITIONS
+        }
+        for update in updates:
+            key = (
+                str(update.get("platform") or "").lower(),
+                str(update.get("content_type") or "").lower(),
+            )
+            if key in grouped:
+                grouped[key].append(update)
+        lines = [
+            "## 创作者动态追踪",
+            "",
+        ]
+        for platform, content_type, title in CREATOR_SECTION_DEFINITIONS:
+            values = sorted(
+                grouped[(platform, content_type)],
+                key=lambda value: str(
+                    value.get("published_at") or ""
+                ),
+                reverse=True,
+            )
+            lines.append(
+                f"### {title}（{len(values)} 条）"
+            )
+            if not values:
+                lines.extend(
+                    [
+                        "今日暂无更新。",
+                        "",
+                    ]
+                )
+                continue
+            for index, update in enumerate(
+                values,
+                1,
+            ):
+                lines.extend(
+                    self._render_creator_update(
+                        update,
+                        index,
+                        content_type,
+                    )
+                )
+        failures = status.get("failures") or []
+        if status.get("status") in {
+            "failed",
+            "partial",
+        } or failures:
+            lines.append(
+                "采集状态：数据不完整。"
+            )
+            for failure in failures:
+                lines.append(
+                    "- "
+                    f"{failure.get('platform') or 'unknown'} "
+                    f"{failure.get('content_type') or 'source'}："
+                    f"{failure.get('error') or '采集失败'}"
+                )
+            lines.append("")
+        elif status.get("status") == "not_configured":
+            lines.extend(
+                [
+                    "采集状态：尚未配置监控账号。",
+                    "",
+                ]
+            )
+        return lines
+
+    @staticmethod
+    def _render_creator_update(
+        update: dict[str, Any],
+        index: int,
+        content_type: str,
+    ) -> list[str]:
+        """渲染单条创作者更新并保留原始链接。"""
+        metadata = update.get("metadata") or {}
+        creator_name = str(
+            update.get("creator_name")
+            or "未命名创作者"
+        )
+        title = _short_text(
+            str(update.get("title") or "未命名内容"),
+            180,
+        )
+        url = str(
+            update.get("url") or ""
+        )
+        lines = [
+            f"{index}. {creator_name}："
+            f"《{title}》"
+            if content_type == "video"
+            else f"{index}. {creator_name}（"
+            f"{metadata.get('dynamic_type') or '动态'}）",
+        ]
+        if content_type == "dynamic":
+            lines.append(
+                "   内容："
+                + _short_text(
+                    str(
+                        update.get("summary")
+                        or update.get("content")
+                        or title
+                    ),
+                    300,
+                )
+            )
+        elif metadata.get("thumbnail"):
+            lines.append(
+                "   封面："
+                + str(metadata.get("thumbnail"))
+            )
+        lines.extend(
+            [
+                "   发布时间："
+                + _display_time(update.get("published_at")),
+                f"   链接：{url}",
+                "",
+            ]
+        )
         return lines
 
     @staticmethod

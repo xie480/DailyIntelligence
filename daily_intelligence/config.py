@@ -27,6 +27,8 @@ HERMES_HANDOFF_FILE_NAME = "hermes-handoff.json"
 PROJECT_ENV_FILE_NAME = ".env"
 GITHUB_TOKEN_NAME = "GITHUB_TOKEN"
 GITHUB_PROXY_NAME = "GITHUB_PROXY"
+BILIBILI_COOKIE_NAME = "BILIBILI_COOKIE"
+CREATOR_ADMIN_KEYS_NAME = "CREATOR_ADMIN_KEYS"
 _ENV_KEY_PATTERN = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*$"
 )
@@ -118,6 +120,34 @@ class ProjectSettings:
         ):
             return "project_env"
         return "auto"
+
+    @property
+    def bilibili_cookie(self) -> str | None:
+        """返回内存中使用的 Bilibili Cookie，空值表示匿名请求。"""
+        return _clean_setting_value(
+            self.variables.get(
+                BILIBILI_COOKIE_NAME
+            )
+        )
+
+    @property
+    def creator_admin_keys(self) -> tuple[str, ...]:
+        """返回逗号分隔的创作者管理 owner 白名单。"""
+        value = _clean_setting_value(
+            self.variables.get(
+                CREATOR_ADMIN_KEYS_NAME
+            )
+        )
+        if not value:
+            return ()
+        return tuple(
+            key.strip()
+            for key in re.split(
+                r"[,;]",
+                value,
+            )
+            if key.strip()
+        )
 
 
 def _clean_setting_value(

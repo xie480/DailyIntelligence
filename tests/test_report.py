@@ -366,6 +366,63 @@ class ReportTestCase(unittest.TestCase):
         )
         self.assertTrue(attachment.is_file())
 
+    def test_renderer_adds_creator_updates_section_and_failure_status(self) -> None:
+        """日报应按平台分类创作者更新并明确显示来源失败。"""
+        markdown = DailyReportRenderer().render(
+            [],
+            report_date=date(
+                2026,
+                11,
+                22,
+            ),
+            creator_updates=[
+                {
+                    "platform": "youtube",
+                    "content_type": "video",
+                    "external_id": "yt-1",
+                    "creator_name": "Example Channel",
+                    "title": "New YouTube Video",
+                    "url": "https://www.youtube.com/watch?v=yt-1",
+                    "published_at": "2026-11-22T08:00:00+00:00",
+                    "metadata": {
+                        "thumbnail": "https://img.example/yt.jpg",
+                    },
+                },
+                {
+                    "platform": "bilibili",
+                    "content_type": "dynamic",
+                    "external_id": "dy-1",
+                    "creator_name": "测试 UP 主",
+                    "title": "文字动态摘要",
+                    "summary": "文字动态摘要",
+                    "url": "https://t.bilibili.com/dy-1",
+                    "published_at": "2026-11-22T09:00:00+00:00",
+                    "metadata": {
+                        "dynamic_type": "文字动态",
+                    },
+                },
+            ],
+            creator_status={
+                "status": "partial",
+                "failures": [
+                    {
+                        "platform": "bilibili",
+                        "content_type": "video",
+                        "error": "接口超时",
+                    }
+                ],
+            },
+        )
+
+        self.assertIn("## 创作者动态追踪", markdown)
+        self.assertIn("### 今日 B站新视频（0 条）", markdown)
+        self.assertIn("### 今日 B站新动态（1 条）", markdown)
+        self.assertIn("### 今日 YouTube 新视频（1 条）", markdown)
+        self.assertIn("Example Channel", markdown)
+        self.assertIn("https://www.youtube.com/watch?v=yt-1", markdown)
+        self.assertIn("数据不完整", markdown)
+        self.assertIn("接口超时", markdown)
+
 
 if __name__ == "__main__":
     unittest.main()

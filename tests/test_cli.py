@@ -8,6 +8,7 @@ import unittest
 from contextlib import redirect_stdout
 from datetime import date, datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from daily_intelligence.cli import (
@@ -79,6 +80,126 @@ class CLITestCase(unittest.TestCase):
             args.data_dir,
             str(self.runtime_dir),
         )
+
+    def test_creator_cli_adds_and_lists_authorized_account(self) -> None:
+        """CLI 应使用 owner 白名单完成账号添加和查询。"""
+        common = [
+            "--data-dir",
+            str(self.runtime_dir),
+        ]
+        with patch.dict(
+            "os.environ",
+            {
+                "CREATOR_ADMIN_KEYS": "qq:owner",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                main(
+                    common
+                    + [
+                        "creator",
+                        "add",
+                        "--owner-key",
+                        "qq:owner",
+                        "--display-name",
+                        "测试 UP 主",
+                        "https://space.bilibili.com/123456",
+                    ]
+                ),
+                0,
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(
+                    main(
+                        common
+                        + [
+                            "creator",
+                            "list",
+                            "--owner-key",
+                            "qq:owner",
+                        ]
+                    ),
+                    0,
+                )
+            self.assertIn("123456", output.getvalue())
+
+    def test_report_integrates_creator_updates_before_advancing_result(self) -> None:
+        """日报入口应把创作者章节写入两份报告并完成最终化。"""
+        captured: dict[str, object] = {}
+
+        class FakeCreatorService:
+            """替代外部平台采集的日报集成桩。"""
+
+            def __init__(self, database: object, timezone_name: str) -> None:
+                """记录日报使用的业务时区。"""
+                captured["timezone"] = timezone_name
+
+            def collect(self, window_end: datetime, run_key: str) -> object:
+                """返回一个成功且带固定截止时间的结果。"""
+                captured["window_end"] = window_end
+                captured["run_key"] = run_key
+                return SimpleNamespace(
+                    status="success",
+                    window_end=window_end,
+                    failures=[],
+                )
+
+            def report_updates(self, result: object) -> list[dict[str, object]]:
+                """返回一条可渲染 YouTube 更新。"""
+                return [
+                    {
+                        "platform": "youtube",
+                        "content_type": "video",
+                        "creator_name": "Example Channel",
+                        "title": "Daily Video",
+                        "url": "https://www.youtube.com/watch?v=daily",
+                        "published_at": "2026-11-22T08:00:00+00:00",
+                        "metadata": {},
+                    }
+                ]
+
+            def finalize(self, result: object, report_saved: bool) -> None:
+                """记录报告保存后的最终化动作。"""
+                captured["finalized"] = report_saved
+
+        with patch(
+            "daily_intelligence.cli.CreatorUpdatesService",
+            FakeCreatorService,
+        ):
+            self.assertEqual(
+                main(
+                    [
+                        "--data-dir",
+                        str(self.runtime_dir),
+                        "report",
+                        "--date",
+                        "2026-11-22",
+                        "--no-record",
+                    ]
+                ),
+                0,
+            )
+
+        report = (
+            self.runtime_dir
+            / "reports"
+            / "2026-11-22.md"
+        ).read_text(
+            encoding="utf-8"
+        )
+        qq_report = (
+            self.runtime_dir
+            / "reports"
+            / "2026-11-22.qq.md"
+        ).read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Example Channel", report)
+        self.assertIn("Example Channel", qq_report)
+        self.assertEqual(captured["timezone"], "Asia/Shanghai")
+        self.assertTrue(captured["finalized"])
 
     def test_init_feedback_profile_and_report_commands(self) -> None:
         """初始化、反馈、查看画像和指定日期日报应可连续执行。"""

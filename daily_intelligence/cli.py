@@ -14,14 +14,22 @@ from typing import Any, Iterable
 from . import __version__
 from .collectors.github import GitHubClient, GitHubCollector
 from .collectors.rss import RSSCollector
+from .collectors.creators import BilibiliClient, YouTubeClient
 from .config import (
     DEFAULT_DATA_DIR,
     DEFAULT_TIMEZONE,
     RuntimePaths,
     configure_logging,
     date_in_timezone,
+    load_project_settings,
     timezone_or_default,
 )
+from .creator_service import (
+    CreatorAccountService,
+    CreatorUpdatesService,
+    creator_now,
+)
+from .creator_urls import parse_creator_url
 from .database import Database
 from .handoff import import_handoff, load_handoff
 from .models import Item
@@ -274,6 +282,114 @@ def build_parser() -> argparse.ArgumentParser:
         help="不写入推荐历史",
     )
 
+    creator_parser = subparsers.add_parser(
+        "creator",
+        help="管理 Bilibili UP 主和 YouTube 频道",
+    )
+    _add_runtime_overrides(creator_parser)
+    creator_subparsers = creator_parser.add_subparsers(
+        dest="creator_command",
+        required=True,
+    )
+    creator_add_parser = creator_subparsers.add_parser(
+        "add",
+        help="添加一个或多个创作者主页链接",
+    )
+    _add_runtime_overrides(creator_add_parser)
+    creator_add_parser.add_argument(
+        "urls",
+        nargs="+",
+    )
+    creator_add_parser.add_argument(
+        "--owner-key",
+        default=None,
+        help="Hermes 传入的稳定授权 owner 标识",
+    )
+    creator_add_parser.add_argument(
+        "--display-name",
+        default=None,
+    )
+    creator_add_parser.add_argument(
+        "--no-videos",
+        action="store_true",
+    )
+    creator_add_parser.add_argument(
+        "--no-dynamics",
+        action="store_true",
+    )
+
+    creator_list_parser = creator_subparsers.add_parser(
+        "list",
+        help="查看当前 owner 的监控账号",
+    )
+    _add_runtime_overrides(creator_list_parser)
+    creator_list_parser.add_argument(
+        "--owner-key",
+        default=None,
+    )
+
+    for command, help_text in (
+        (
+            "remove",
+            "删除监控账号",
+        ),
+        (
+            "pause",
+            "暂停监控账号",
+        ),
+        (
+            "resume",
+            "恢复监控账号",
+        ),
+    ):
+        command_parser = creator_subparsers.add_parser(
+            command,
+            help=help_text,
+        )
+        _add_runtime_overrides(command_parser)
+        command_parser.add_argument(
+            "platform",
+            choices=[
+                "bilibili",
+                "youtube",
+            ],
+        )
+        command_parser.add_argument(
+            "account_key",
+        )
+        command_parser.add_argument(
+            "--owner-key",
+            default=None,
+        )
+
+    creator_configure_parser = creator_subparsers.add_parser(
+        "configure",
+        help="修改创作者视频/动态监控类型",
+    )
+    _add_runtime_overrides(creator_configure_parser)
+    creator_configure_parser.add_argument(
+        "platform",
+        choices=[
+            "bilibili",
+            "youtube",
+        ],
+    )
+    creator_configure_parser.add_argument(
+        "account_key",
+    )
+    creator_configure_parser.add_argument(
+        "--owner-key",
+        default=None,
+    )
+    creator_configure_parser.add_argument(
+        "--no-videos",
+        action="store_true",
+    )
+    creator_configure_parser.add_argument(
+        "--no-dynamics",
+        action="store_true",
+    )
+
     dry_run_parser = subparsers.add_parser(
         "dry-run",
         help="使用内置样例生成日报，不访问网络或写入运行数据",
@@ -318,6 +434,7 @@ def _dispatch(
         "query": _query,
         "profile": _profile,
         "report": _report,
+        "creator": _creator,
         "dry-run": _dry_run,
     }
     return handlers[args.command](args)
@@ -332,6 +449,8 @@ def _runtime(
     configure_logging(paths)
     database = Database(paths.database_path)
     database.initialize()
+    for owner_key in load_project_settings().creator_admin_keys:
+        database.authorize_creator_owner(owner_key)
     profile = InterestProfileStore(
         paths,
         database,
@@ -776,10 +895,31 @@ def _report(
     """生成、保存并打印指定日期的日报路径。"""
     paths, database, profile = _runtime(args)
     try:
+        window_end = creator_now(
+            args.timezone,
+        )
         report_date = (
             date.fromisoformat(args.report_date)
             if args.report_date
-            else _run_date(args)
+            else _run_date(
+                args,
+                now=window_end,
+            )
+        )
+        creator_service = CreatorUpdatesService(
+            database,
+            timezone_name=args.timezone,
+        )
+        creator_result = creator_service.collect(
+            window_end=window_end,
+            run_key=f"report-creators:{window_end.isoformat()}",
+        )
+        creator_updates = creator_service.report_updates(
+            creator_result,
+        )
+        creator_status = _creator_collection_status(
+            creator_result,
+            event_count=len(creator_updates),
         )
         renderer = DailyReportRenderer()
         engine = RecommendationEngine(
@@ -799,6 +939,8 @@ def _report(
             report_date=report_date,
             total_limit=args.limit,
             collection_status=_load_collection_status(paths),
+            creator_updates=creator_updates,
+            creator_status=creator_status,
         )
         report_path = save_report(
             paths,
@@ -812,8 +954,14 @@ def _report(
                 report_date=report_date,
                 total_limit=args.limit,
                 collection_status=_load_collection_status(paths),
+                creator_updates=creator_updates,
+                creator_status=creator_status,
             ),
             report_date,
+        )
+        creator_service.finalize(
+            creator_result,
+            report_saved=True,
         )
         if not args.no_record:
             engine.record_recommendations(
@@ -824,6 +972,171 @@ def _report(
         return 0
     finally:
         database.close()
+
+
+def _creator_collection_status(
+    result: Any,
+    event_count: int,
+) -> dict[str, Any]:
+    """把创作者采集结果转换为日报渲染所需的安全状态字典。"""
+    return {
+        "status": result.status,
+        "event_count": event_count,
+        "window_end": result.window_end.isoformat(),
+        "failures": [
+            {
+                "platform": outcome.platform,
+                "content_type": outcome.content_type,
+                "error": outcome.error or "采集失败",
+            }
+            for outcome in result.failures
+        ],
+    }
+
+
+def _creator(
+    args: argparse.Namespace,
+) -> int:
+    """处理创作者账号的添加、查询、暂停、恢复和删除命令。"""
+    _, database, _ = _runtime(args)
+    try:
+        owner_key = _resolve_creator_owner_key(
+            args,
+        )
+        service = CreatorAccountService(
+            database,
+        )
+        command = args.creator_command
+        if command == "add":
+            results = _add_creator_accounts(
+                service,
+                args,
+                owner_key,
+            )
+            print(
+                json.dumps(
+                    results,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
+        if command == "list":
+            print(
+                json.dumps(
+                    service.list_accounts(owner_key),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
+        if command == "remove":
+            service.remove_account(
+                args.platform,
+                args.account_key,
+                owner_key,
+            )
+            print("创作者账号已删除")
+            return 0
+        if command == "pause":
+            service.pause_account(
+                args.platform,
+                args.account_key,
+                owner_key,
+            )
+            print("创作者账号已暂停")
+            return 0
+        if command == "resume":
+            service.resume_account(
+                args.platform,
+                args.account_key,
+                owner_key,
+            )
+            print("创作者账号已恢复")
+            return 0
+        if command == "configure":
+            service.configure_account(
+                args.platform,
+                args.account_key,
+                owner_key,
+                monitor_videos=not args.no_videos,
+                monitor_dynamics=(
+                    False
+                    if args.platform == "youtube"
+                    else not args.no_dynamics
+                ),
+            )
+            print("创作者监控类型已更新")
+            return 0
+        raise ValueError(
+            f"不支持的创作者命令: {command}"
+        )
+    finally:
+        database.close()
+
+
+def _add_creator_accounts(
+    service: CreatorAccountService,
+    args: argparse.Namespace,
+    owner_key: str,
+) -> list[dict[str, Any]]:
+    """解析多个主页链接并尽量在添加时补齐平台显示名称。"""
+    settings = load_project_settings()
+    bilibili_client = BilibiliClient(
+        cookie=settings.bilibili_cookie,
+    )
+    youtube_client = YouTubeClient()
+    results: list[dict[str, Any]] = []
+    for url in args.urls:
+        parsed = parse_creator_url(url)
+        resolved_key: str | None = None
+        resolved_name: str | None = None
+        if parsed.requires_resolution:
+            resolved_key, resolved_name = youtube_client.resolve_channel(
+                url,
+            )
+        elif parsed.platform == "bilibili" and not args.display_name:
+            try:
+                resolved_name = bilibili_client.resolve_account_name(
+                    parsed.account_key,
+                )
+            except Exception:
+                resolved_name = None
+        results.append(
+            service.add_account(
+                url,
+                owner_key=owner_key,
+                display_name=args.display_name,
+                monitor_videos=not args.no_videos,
+                monitor_dynamics=(
+                    False
+                    if parsed.platform == "youtube"
+                    else not args.no_dynamics
+                ),
+                resolved_account_key=resolved_key,
+                resolved_display_name=resolved_name,
+            )
+        )
+    return results
+
+
+def _resolve_creator_owner_key(
+    args: argparse.Namespace,
+) -> str:
+    """读取命令参数或本地环境中的稳定 owner 标识。"""
+    owner_key = str(
+        getattr(args, "owner_key", None)
+        or load_project_settings().variables.get(
+            "CREATOR_OWNER_KEY",
+            "",
+        )
+    ).strip()
+    if not owner_key:
+        raise ValueError(
+            "创作者管理需要 --owner-key，或配置 CREATOR_OWNER_KEY；"
+            "并确保该值存在 CREATOR_ADMIN_KEYS 白名单"
+        )
+    return owner_key
 
 
 def _dry_run(
