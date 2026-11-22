@@ -46,6 +46,7 @@ class ProjectConfigTestCase(unittest.TestCase):
             b"# ignored comment\r\n"
             b" GITHUB_TOKEN = 'single-quoted-token' # trailing comment\r\n"
             b"DOUBLE_QUOTED=\"double-quoted-value\"\r\n"
+            b"GITHUB_PROXY = 'http://127.0.0.1:7890'\r\n"
             b"PLAIN=value # inline comment\r\n"
         )
 
@@ -56,6 +57,7 @@ class ProjectConfigTestCase(unittest.TestCase):
             {
                 "GITHUB_TOKEN": "single-quoted-token",
                 "DOUBLE_QUOTED": "double-quoted-value",
+                "GITHUB_PROXY": "http://127.0.0.1:7890",
                 "PLAIN": "value",
             },
         )
@@ -96,6 +98,56 @@ class ProjectConfigTestCase(unittest.TestCase):
         )
         self.assertIsNone(
             empty_process_token.github_token,
+        )
+
+    def test_github_proxy_source_follows_process_then_project_priority(self) -> None:
+        """GitHub 专用代理应按进程变量、项目文件顺序选择来源。"""
+        (self.project_root / ".env").write_text(
+            "GITHUB_PROXY=http://127.0.0.1:7890\n",
+            encoding="utf-8",
+        )
+
+        project_settings = load_project_settings(
+            self.project_root,
+            {},
+        )
+        self.assertEqual(
+            project_settings.github_proxy,
+            "http://127.0.0.1:7890",
+        )
+        self.assertEqual(
+            project_settings.github_proxy_source,
+            "project_env",
+        )
+
+        empty_process_settings = load_project_settings(
+            self.project_root,
+            {
+                "GITHUB_PROXY": "  ",
+            },
+        )
+        self.assertEqual(
+            empty_process_settings.github_proxy,
+            "http://127.0.0.1:7890",
+        )
+        self.assertEqual(
+            empty_process_settings.github_proxy_source,
+            "project_env",
+        )
+
+        process_settings = load_project_settings(
+            self.project_root,
+            {
+                "GITHUB_PROXY": "http://127.0.0.1:4567",
+            },
+        )
+        self.assertEqual(
+            process_settings.github_proxy,
+            "http://127.0.0.1:4567",
+        )
+        self.assertEqual(
+            process_settings.github_proxy_source,
+            "process_env",
         )
 
     def test_missing_env_file_falls_back_to_empty_settings(self) -> None:
@@ -215,6 +267,19 @@ class ProjectConfigTestCase(unittest.TestCase):
         self.assertIn(
             "!.env.example",
             gitignore,
+        )
+        env_example = (
+            repository_root / ".env.example"
+        ).read_text(
+            encoding="utf-8",
+        )
+        self.assertIn(
+            "# GitHub API 专用代理；留空时使用系统/Python 自动代理发现",
+            env_example,
+        )
+        self.assertIn(
+            "GITHUB_PROXY=http://127.0.0.1:7890",
+            env_example,
         )
 
 

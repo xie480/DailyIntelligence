@@ -12,13 +12,15 @@ from email.utils import format_datetime
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
-from urllib.request import Request
+from urllib.request import ProxyHandler, Request
+import urllib.request as urllib_request
 
 from daily_intelligence.collectors.github import (
     GitHubAPIError,
     GitHubCollector,
     GitHubClient,
     GitHubNetworkError,
+    GitHubProxyConfigError,
 )
 from daily_intelligence.collectors.rss import RSSCollector
 from tests.test_support import temporary_directory
@@ -223,6 +225,14 @@ class CollectorTestCase(unittest.TestCase):
         self.token_environment.start()
         self.addCleanup(
             self.token_environment.stop,
+        )
+        self.proxy_bypass_environment = patch(
+            "daily_intelligence.collectors.github.proxy_bypass",
+            return_value=False,
+        )
+        self.proxy_bypass_environment.start()
+        self.addCleanup(
+            self.proxy_bypass_environment.stop,
         )
 
     def test_github_collector_parses_repository_and_release(self) -> None:
@@ -533,7 +543,8 @@ class CollectorTestCase(unittest.TestCase):
             project_tempdir.name
         )
         (project_root / ".env").write_text(
-            "GITHUB_TOKEN='project-token'\n",
+            "GITHUB_TOKEN='project-token'\n"
+            "GITHUB_PROXY=http://127.0.0.1:7890\n",
             encoding="utf-8",
         )
 
@@ -542,11 +553,16 @@ class CollectorTestCase(unittest.TestCase):
                 "/project-auth": b"{}",
             }
         )
-        GitHubClient(
-            project_root=project_root,
-            environ={},
-            opener=project_opener,
-        ).get_json("/project-auth")
+        with patch(
+            "daily_intelligence.collectors.github.proxy_bypass",
+            return_value=False,
+        ):
+            project_client = GitHubClient(
+                project_root=project_root,
+                environ={},
+                opener=project_opener,
+            )
+            project_client.get_json("/project-auth")
         self.assertEqual(
             request_header(
                 project_opener.requests[0],
@@ -554,25 +570,270 @@ class CollectorTestCase(unittest.TestCase):
             ),
             "Bearer project-token",
         )
+        self.assertEqual(
+            project_client.proxy_source,
+            "project_env",
+        )
+        self.assertEqual(
+            project_client.proxy_port,
+            7890,
+        )
 
         process_opener = FakeOpener(
             {
                 "/process-auth": b"{}",
             }
         )
-        GitHubClient(
-            project_root=project_root,
-            environ={
-                "GITHUB_TOKEN": "process-token",
-            },
-            opener=process_opener,
-        ).get_json("/process-auth")
+        with patch(
+            "daily_intelligence.collectors.github.proxy_bypass",
+            return_value=False,
+        ):
+            process_client = GitHubClient(
+                project_root=project_root,
+                environ={
+                    "GITHUB_TOKEN": "process-token",
+                    "GITHUB_PROXY": "http://127.0.0.1:4567",
+                    "HTTPS_PROXY": "http://127.0.0.1:9",
+                },
+                opener=process_opener,
+            )
+            process_client.get_json("/process-auth")
         self.assertEqual(
             request_header(
                 process_opener.requests[0],
                 "Authorization",
             ),
             "Bearer process-token",
+        )
+        self.assertEqual(
+            process_client.proxy_source,
+            "process_env",
+        )
+        self.assertEqual(
+            process_client.proxy_port,
+            4567,
+        )
+
+    def test_github_client_explicit_proxy_opener_overrides_generic_proxy(self) -> None:
+        """项目代理应同时覆盖 HTTP/HTTPS 通用代理并进入独立 opener。"""
+        with patch(
+            "daily_intelligence.collectors.github.proxy_bypass",
+            return_value=False,
+        ):
+            client = GitHubClient(
+                environ={
+                    "GITHUB_PROXY": "http://127.0.0.1:7890",
+                    "HTTP_PROXY": "http://127.0.0.1:9",
+                    "HTTPS_PROXY": "http://127.0.0.1:9",
+                    "ALL_PROXY": "http://127.0.0.1:9",
+                },
+            )
+
+        proxy_handlers = [
+            handler
+            for handler in client._http_opener.handlers
+            if isinstance(
+                handler,
+                ProxyHandler,
+            )
+        ]
+        self.assertEqual(
+            len(proxy_handlers),
+            1,
+        )
+        self.assertEqual(
+            proxy_handlers[0].proxies,
+            {
+                "http": "http://127.0.0.1:7890",
+                "https": "http://127.0.0.1:7890",
+            },
+        )
+        self.assertEqual(
+            client.proxy_mode,
+            "explicit",
+        )
+
+    def test_github_client_accepts_https_proxy_scheme(self) -> None:
+        """项目代理应接受 HTTPS scheme 并保留端口元数据。"""
+        with patch(
+            "daily_intelligence.collectors.github.proxy_bypass",
+            return_value=False,
+        ):
+            client = GitHubClient(
+                environ={
+                    "GITHUB_PROXY": "https://127.0.0.1:7890",
+                },
+                opener=FakeOpener(
+                    {
+                        "/https-proxy": b"{}",
+                    }
+                ),
+            )
+
+        self.assertEqual(
+            client.proxy_scheme,
+            "https",
+        )
+        self.assertEqual(
+            client.proxy_port,
+            7890,
+        )
+
+    def test_github_client_falls_back_to_python_proxy_discovery(self) -> None:
+        """缺少 GITHUB_PROXY 时应保留 Python 自动代理发现。"""
+        project_tempdir = temporary_directory(
+            prefix="daily-intelligence-github-auto-proxy-",
+        )
+        self.addCleanup(
+            project_tempdir.cleanup,
+        )
+        with patch(
+            "daily_intelligence.collectors.github.getproxies",
+            return_value={
+                "https": "http://127.0.0.1:9",
+            },
+        ), patch(
+            "daily_intelligence.collectors.github.proxy_bypass",
+            return_value=False,
+        ):
+            client = GitHubClient(
+                project_root=Path(
+                    project_tempdir.name
+                ),
+                environ={},
+                opener=FakeOpener(
+                    {
+                        "/auto-proxy": b"{}",
+                    }
+                ),
+            )
+
+        self.assertEqual(
+            client.proxy_mode,
+            "auto",
+        )
+        self.assertEqual(
+            client.proxy_source,
+            "auto",
+        )
+        self.assertTrue(
+            client.proxy_configured,
+        )
+
+    def test_github_client_rejects_invalid_explicit_proxy(self) -> None:
+        """无效项目代理应在初始化时失败且不得静默直连。"""
+        with self.assertRaises(GitHubProxyConfigError) as context:
+            GitHubClient(
+                environ={
+                    "GITHUB_PROXY": "ftp://proxy.example.invalid:7890",
+                },
+            )
+
+        self.assertIn(
+            "GITHUB_PROXY",
+            str(context.exception),
+        )
+        self.assertNotIn(
+            "proxy.example.invalid",
+            str(context.exception),
+        )
+
+    def test_github_client_rejects_invalid_proxy_ports(self) -> None:
+        """项目代理端口缺失、越界或非数字时应明确失败。"""
+        for proxy_url in (
+            "http://proxy.example.invalid:0",
+            "http://proxy.example.invalid:65536",
+            "http://proxy.example.invalid:not-a-port",
+        ):
+            with self.subTest(proxy_url=proxy_url):
+                with self.assertRaises(GitHubProxyConfigError):
+                    GitHubClient(
+                        environ={
+                            "GITHUB_PROXY": proxy_url,
+                        },
+                    )
+
+    def test_github_client_reports_no_proxy_conflict(self) -> None:
+        """NO_PROXY 可能绕过显式代理时应给出明确错误。"""
+        with patch(
+            "daily_intelligence.collectors.github.proxy_bypass",
+            return_value=True,
+        ):
+            with self.assertRaises(GitHubProxyConfigError) as context:
+                GitHubClient(
+                    environ={
+                        "GITHUB_PROXY": "http://127.0.0.1:7890",
+                    },
+                )
+
+        self.assertIn(
+            "NO_PROXY",
+            str(context.exception),
+        )
+
+    def test_github_client_does_not_modify_global_proxy_state(self) -> None:
+        """创建客户端不得修改环境变量或 urllib 全局 opener。"""
+        environment_before = dict(os.environ)
+        opener_before = urllib_request._opener
+        with patch(
+            "daily_intelligence.collectors.github.proxy_bypass",
+            return_value=False,
+        ):
+            GitHubClient(
+                environ={
+                    "GITHUB_PROXY": "https://127.0.0.1:7890",
+                },
+            )
+
+        self.assertEqual(
+            dict(os.environ),
+            environment_before,
+        )
+        self.assertIs(
+            urllib_request._opener,
+            opener_before,
+        )
+
+    def test_github_proxy_error_redacts_token_and_proxy_credentials(self) -> None:
+        """代理网络错误不得泄露 Token 或代理认证信息。"""
+        fake_token = "ephemeral-proxy-token"
+        proxy_secret = "proxy-secret"
+        opener = SequenceOpener(
+            [
+                URLError(
+                    OSError("proxy connection refused"),
+                )
+            ]
+        )
+        with patch(
+            "daily_intelligence.collectors.github.proxy_bypass",
+            return_value=False,
+        ):
+            with self.assertRaises(GitHubNetworkError) as context:
+                GitHubClient(
+                    token=fake_token,
+                    opener=opener,
+                    retries=0,
+                    environ={
+                        "GITHUB_PROXY": (
+                            "http://proxy-user:"
+                            f"{proxy_secret}@127.0.0.1:7890"
+                        ),
+                    },
+                ).get_json("/proxy-auth-error")
+
+        message = str(context.exception)
+        self.assertNotIn(
+            fake_token,
+            message,
+        )
+        self.assertNotIn(
+            proxy_secret,
+            message,
+        )
+        self.assertNotIn(
+            "proxy-user",
+            message,
         )
 
     def test_github_client_reports_invalid_token_without_leaking_it(self) -> None:
