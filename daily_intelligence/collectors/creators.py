@@ -17,6 +17,9 @@ import xml.etree.ElementTree as ElementTree
 from ..creator_service import CreatorWindow
 from ..creator_urls import extract_youtube_channel_id
 from ..models import CreatorAccount, CreatorUpdate
+from .bilibili_risk import (
+    BilibiliRiskController,
+)
 
 
 BILIBILI_VIDEO_API = "https://api.bilibili.com/x/space/wbi/arc/search"
@@ -35,6 +38,18 @@ MAX_DYNAMIC_PAGES = 50
 
 class CreatorHttpError(RuntimeError):
     """表示创作者平台请求失败或返回了不可解析的数据。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        url: str | None = None,
+    ) -> None:
+        """保存可供上层分类的 HTTP 状态和脱敏 URL。"""
+        self.status_code = status_code
+        self.url = url
+        super().__init__(message)
 
 
 class _HttpClient:
@@ -95,7 +110,9 @@ class _HttpClient:
                 } or error.code >= 500
                 if not retryable or attempt >= self.retries:
                     raise CreatorHttpError(
-                        f"HTTP {error.code} 请求失败: {url.split('?')[0]}"
+                        f"HTTP {error.code} 请求失败: {url.split('?')[0]}",
+                        status_code=error.code,
+                        url=url,
                     ) from error
             except (
                 OSError,
@@ -128,6 +145,7 @@ class BilibiliClient(_HttpClient):
         retries: int = DEFAULT_RETRIES,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         sleep: Callable[[float], None] | None = None,
+        risk_controller: BilibiliRiskController | None = None,
     ) -> None:
         """初始化 Bilibili 客户端，Cookie 只保存在内存。"""
         super().__init__(
@@ -138,6 +156,9 @@ class BilibiliClient(_HttpClient):
         )
         self.cookie = (cookie or "").strip() or None
         self._wbi_cache: tuple[str, str] | None = None
+        self.risk_controller = risk_controller or BilibiliRiskController(
+            sleep=self.sleep,
+        )
 
     def fetch_video_page(
         self,
@@ -146,6 +167,9 @@ class BilibiliClient(_HttpClient):
         page_size: int = 30,
     ) -> dict[str, Any]:
         """读取一页 UP 主投稿列表，使用 WBI 签名。"""
+        self.risk_controller.ensure_available(
+            "video",
+        )
         params = {
             "mid": uid,
             "pn": str(page),
@@ -162,6 +186,7 @@ class BilibiliClient(_HttpClient):
         return self._request_json(
             BILIBILI_VIDEO_API,
             params,
+            risk_key="video",
         )
 
     def fetch_dynamic_page(
@@ -177,6 +202,7 @@ class BilibiliClient(_HttpClient):
         return self._request_json(
             BILIBILI_DYNAMIC_API,
             params,
+            risk_key="dynamic",
         )
 
     def resolve_account_name(
@@ -189,6 +215,7 @@ class BilibiliClient(_HttpClient):
             {
                 "mid": uid,
             },
+            risk_key="account",
         )
         name = str(
             ((payload.get("data") or {}).get("name") or "")
@@ -207,6 +234,7 @@ class BilibiliClient(_HttpClient):
             allowed_codes={
                 -101,
             },
+            risk_key="nav",
         )
         images = (
             ((payload.get("data") or {}).get("wbi_img") or {})
@@ -228,6 +256,7 @@ class BilibiliClient(_HttpClient):
         endpoint: str,
         params: dict[str, str],
         allowed_codes: set[int] | None = None,
+        risk_key: str = "unknown",
     ) -> dict[str, Any]:
         """请求 JSON 并验证 Bilibili code/data 结构。"""
         query = urlencode(
@@ -244,6 +273,9 @@ class BilibiliClient(_HttpClient):
         }
         if self.cookie:
             headers["Cookie"] = self.cookie
+        self.risk_controller.before_request(
+            risk_key,
+        )
         try:
             payload = json.loads(
                 self._request_bytes(
@@ -251,6 +283,15 @@ class BilibiliClient(_HttpClient):
                     headers=headers,
                 ).decode("utf-8")
             )
+        except CreatorHttpError as error:
+            risk_error = self.risk_controller.record_failure(
+                risk_key,
+                endpoint=endpoint,
+                http_status=error.status_code,
+            )
+            if risk_error is not None:
+                raise risk_error from error
+            raise
         except (
             UnicodeError,
             json.JSONDecodeError,
@@ -268,9 +309,25 @@ class BilibiliClient(_HttpClient):
         )
         if code not in accepted_codes:
             message = str(payload.get("message") or "未知错误")
+            if self.risk_controller.is_risk_control(
+                code=code,
+            ):
+                if risk_key == "video" and code == -352:
+                    self._wbi_cache = None
+                risk_error = self.risk_controller.record_failure(
+                    risk_key,
+                    endpoint=endpoint,
+                    code=code,
+                    message=message,
+                )
+                if risk_error is not None:
+                    raise risk_error
             raise CreatorHttpError(
                 f"Bilibili 接口返回错误 {code}: {message[:120]}"
             )
+        self.risk_controller.record_success(
+            risk_key,
+        )
         return payload
 
 
