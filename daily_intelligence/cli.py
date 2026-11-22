@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from dataclasses import asdict
 from datetime import date, datetime
@@ -372,9 +371,12 @@ def _collect_github(
             args,
             paths,
         ).get("github") or {}
-        client = GitHubClient(
-            token=os.getenv("GITHUB_TOKEN"),
-        )
+        client = GitHubClient()
+        if client.token is None:
+            print(
+                "未找到 GITHUB_TOKEN，使用匿名 GitHub API，配额较低。",
+                file=sys.stderr,
+            )
         items = GitHubCollector(client).collect(
             queries=config.get("queries"),
             per_page=int(config.get("per_page") or 20),

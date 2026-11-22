@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import unittest
+import uuid
 from datetime import datetime, timezone
 from email.utils import format_datetime
+from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
@@ -382,6 +385,101 @@ class CollectorTestCase(unittest.TestCase):
                 anonymous_opener.requests[0],
                 "Authorization",
             )
+        )
+
+    def test_github_client_reads_project_env_and_process_precedence(self) -> None:
+        """GitHub 客户端应读取项目 `.env`，并让进程变量优先。"""
+        project_root = (
+            Path.cwd()
+            / ".test-tmp"
+            / f"github-auth-{uuid.uuid4().hex}"
+        )
+        project_root.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        self.addCleanup(
+            shutil.rmtree,
+            project_root,
+            True,
+        )
+        (project_root / ".env").write_text(
+            "GITHUB_TOKEN='project-token'\n",
+            encoding="utf-8",
+        )
+
+        project_opener = FakeOpener(
+            {
+                "/project-auth": b"{}",
+            }
+        )
+        GitHubClient(
+            project_root=project_root,
+            environ={},
+            opener=project_opener,
+        ).get_json("/project-auth")
+        self.assertEqual(
+            request_header(
+                project_opener.requests[0],
+                "Authorization",
+            ),
+            "Bearer project-token",
+        )
+
+        process_opener = FakeOpener(
+            {
+                "/process-auth": b"{}",
+            }
+        )
+        GitHubClient(
+            project_root=project_root,
+            environ={
+                "GITHUB_TOKEN": "process-token",
+            },
+            opener=process_opener,
+        ).get_json("/process-auth")
+        self.assertEqual(
+            request_header(
+                process_opener.requests[0],
+                "Authorization",
+            ),
+            "Bearer process-token",
+        )
+
+    def test_github_client_reports_invalid_token_without_leaking_it(self) -> None:
+        """401 应提示 Token 失效，且异常不得包含 Token 内容。"""
+        fake_token = "ephemeral-invalid-token"
+        opener = SequenceOpener(
+            [
+                HTTPError(
+                    "https://api.github.com/user",
+                    401,
+                    f"invalid token {fake_token}",
+                    {},
+                    None,
+                )
+            ]
+        )
+
+        with self.assertRaises(GitHubAPIError) as context:
+            GitHubClient(
+                token=fake_token,
+                opener=opener,
+                retries=0,
+            ).get_json("/user")
+
+        error = context.exception
+        self.assertIn(
+            "Token 无效或已过期",
+            str(error),
+        )
+        self.assertNotIn(
+            fake_token,
+            str(error),
+        )
+        self.assertNotIn(
+            fake_token,
+            str(error.url),
         )
 
     def test_github_client_rejects_non_api_hosts_and_redirect_targets(self) -> None:

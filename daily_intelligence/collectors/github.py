@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from collections import OrderedDict
@@ -12,7 +11,8 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from math import isfinite
-from typing import Any, Callable, Iterable
+from pathlib import Path
+from typing import Any, Callable, Iterable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, quote, unquote, urlsplit
 from urllib.request import (
@@ -22,6 +22,7 @@ from urllib.request import (
 )
 
 from ..deduplication import deduplicate_items
+from ..config import load_project_settings
 from ..models import Item
 
 
@@ -276,10 +277,15 @@ class GitHubClient:
         max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
         time_fn: Callable[[], float] | None = None,
         etag_cache_size: int = DEFAULT_ETAG_CACHE_SIZE,
+        project_root: Path | str | None = None,
+        environ: Mapping[str, str] | None = None,
     ) -> None:
         """初始化可注入网络客户端，便于离线测试。"""
         runtime_token = (
-            os.environ.get("GITHUB_TOKEN")
+            load_project_settings(
+                project_root=project_root,
+                environ=environ,
+            ).github_token
             if token is None
             else token
         )
@@ -775,9 +781,14 @@ class GitHubClient:
         error: HTTPError,
     ) -> GitHubAPIError:
         """把标准库 HTTPError 转为不泄露细节的异常。"""
+        message = (
+            "GitHub Token 无效或已过期"
+            if error.code == 401
+            else f"GitHub API returned HTTP {error.code}"
+        )
         return GitHubAPIError(
             error.code,
-            f"GitHub API returned HTTP {error.code}",
+            message,
             self.token,
         )
 
