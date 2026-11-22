@@ -23,11 +23,15 @@ from .config import (
     timezone_or_default,
 )
 from .database import Database
-from .handoff import import_handoff
+from .handoff import import_handoff, load_handoff
 from .models import Item
 from .profile import InterestProfileStore
 from .recommendations import RecommendationEngine
-from .report import DailyReportRenderer, save_report
+from .report import (
+    DailyReportRenderer,
+    save_qq_report,
+    save_report,
+)
 
 
 DEFAULT_SOURCES = {
@@ -768,10 +772,21 @@ def _report(
             results,
             report_date=report_date,
             total_limit=args.limit,
+            collection_status=_load_collection_status(paths),
         )
         report_path = save_report(
             paths,
             markdown,
+            report_date,
+        )
+        save_qq_report(
+            paths,
+            renderer.render_qq(
+                results,
+                report_date=report_date,
+                total_limit=args.limit,
+                collection_status=_load_collection_status(paths),
+            ),
             report_date,
         )
         if not args.no_record:
@@ -789,35 +804,45 @@ def _dry_run(
     args: argparse.Namespace,
 ) -> int:
     """使用固定样例验证日报渲染，不创建运行数据。"""
-    report = DailyReportRenderer().render(
-        [
-            asdict(
-                Item(
-                    item_type="github",
-                    title="example/agent-tool",
-                    url="https://github.com/example/agent-tool",
-                    source="Dry Run",
-                    summary="用于演示的 Agent 工具。",
-                    category="AI Agent",
-                    metadata={
-                        "section": "github_hot",
-                    },
-                )
-            ),
-            asdict(
-                Item(
-                    item_type="news",
-                    title="Example Agent News",
-                    url="https://example.com/agent-news",
-                    source="Dry Run",
-                    summary="用于演示的 Agent 新闻。",
-                    category="agent",
-                )
-            ),
-        ],
+    renderer = DailyReportRenderer()
+    sample_items = [
+        asdict(
+            Item(
+                item_type="github",
+                title="example/agent-tool",
+                url="https://github.com/example/agent-tool",
+                source="Dry Run",
+                summary="用于演示的 Agent 工具。",
+                category="AI Agent",
+                metadata={
+                    "section": "github_hot",
+                },
+            )
+        ),
+        asdict(
+            Item(
+                item_type="news",
+                title="Example Agent News",
+                url="https://example.com/agent-news",
+                source="Dry Run",
+                summary="用于演示的 Agent 新闻。",
+                category="agent",
+            )
+        ),
+    ]
+    report = renderer.render(
+        sample_items,
         report_date=_run_date(args),
     )
-    print(report)
+    qq_report = renderer.render_qq(
+        sample_items,
+        report_date=_run_date(args),
+    )
+    print(
+        report
+        + "\n--- QQ Markdown 预览 ---\n"
+        + qq_report
+    )
     return 0
 
 
@@ -830,6 +855,22 @@ def _run_date(
         args.timezone,
         now,
     )
+
+
+def _load_collection_status(
+    paths: RuntimePaths,
+) -> dict[str, Any]:
+    """读取已验证的 Hermes 交接状态，损坏时保留明确错误标记。"""
+    if not paths.handoff_path.is_file():
+        return {}
+    try:
+        return load_handoff(
+            paths.handoff_path,
+        )
+    except Exception as error:
+        return {
+            "handoff_error": type(error).__name__,
+        }
 
 
 if __name__ == "__main__":
