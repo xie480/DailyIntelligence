@@ -88,7 +88,8 @@ python -m daily_intelligence --data-dir "$env:TEMP\daily-intelligence-manual" dr
 | feedback TEXT | 解析明确反馈，可用 --target 指定项目 |
 | query TOPIC | 记录一次主动查询主题，三次重复查询后小幅增加权重 |
 | profile show/reset/enable/disable | 查看或管理画像 |
-| report | 按推荐结果保存 Markdown 日报，支持 --date YYYY-MM-DD |
+| report | 按推荐结果保存 Markdown 日报，支持 --date YYYY-MM-DD；`--json` 返回本次 `report_path` 和 `qq_report_path` |
+| read-report --path PATH | 以 UTF-8 读取指定 `.qq.md` 正文，并返回完整内容和 QQ 分段 |
 | creator add URL... | 添加一个或多个 Bilibili/YouTube 监控账号 |
 | creator list | 查看当前 owner 的监控账号 |
 | creator pause/resume PLATFORM KEY | 暂停或恢复账号 |
@@ -101,6 +102,8 @@ python -m daily_intelligence --data-dir "$env:TEMP\daily-intelligence-manual" dr
 ~~~~powershell
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" --timezone "Asia/Shanghai" report
 ~~~~
+
+手动触发日报时，Hermes 必须先执行 `report --json`，再把 JSON 返回的 `qq_report_path` 原样传给 `read-report --path ... --json`。读取命令会完整读回 UTF-8 正文，并按消息上限返回有日期、连续序号和完成标记的 `messages`；不得按日期猜路径、重新生成日报或只发送执行摘要。
 
 创作者管理命令由 `dailyintelligence-creators` Skill 通过 Hermes 传入当前私聊的真实 sender ID。没有预置授权时，首次创作者管理请求会自动登记该 sender ID；后续请求必须使用同一个 ID。Skill 使用 `creator --json` 获取结构化成功/失败结果：
 
@@ -151,11 +154,11 @@ python -m unittest discover -s tests -v
 
 ## Hermes 使用方式
 
-将 `E:\YilenaCode\DailyIntelligence\skills` 下的 `daily-intelligence-local`、`dailyintelligence-creators` 及其他 Skill 作为 Hermes 外部只读 Skills 目录，或按 deployment/HERMES_INSTALL.md 复制到目标 Profile 的 Skills 目录。完整日报流程由 `daily-intelligence-local` 编排：先运行 GitHub/RSS 采集，再让 Hermes 用 `web_search` 覆盖三个新闻领域、用 `web_extract` 核实原文，写入交接 JSON，执行 `import-handoff` 后运行 `report`。`report` 会在同一任务内按账号和内容类型采集创作者更新，最后生成完整和 QQ Markdown 日报。QQ Bot 用户的创作者账号管理由 `dailyintelligence-creators` 负责，日报查询仍由 `daily-intelligence-local` 负责。
+将 `E:\YilenaCode\DailyIntelligence\skills` 下的 `daily-intelligence-local`、`dailyintelligence-creators` 及其他 Skill 作为 Hermes 外部只读 Skills 目录，或按 deployment/HERMES_INSTALL.md 复制到目标 Profile 的 Skills 目录。完整日报流程由 `daily-intelligence-local` 编排：先运行 GitHub/RSS 采集，再让 Hermes 用 `web_search` 覆盖三个新闻领域、用 `web_extract` 核实原文，写入交接 JSON，执行 `import-handoff` 后运行 `report`。`report` 会在同一任务内按账号和内容类型采集创作者更新，最后生成完整和 QQ Markdown 日报。用户手动发送“生成今天的日报”时，Skill 继续使用本次 `report --json` 返回的 `qq_report_path` 读取完整 QQ 正文，并在当前被动 QQ 会话中按 `messages` 顺序输出；不会重复生成或重复推送。QQ Bot 用户的创作者账号管理由 `dailyintelligence-creators` 负责，日报查询仍由 `daily-intelligence-local` 负责。
 
 本次交付只保留 Skill 源文件和调用文档，不安装到 Hermes 实际运行目录，不修改 Hermes Profile，不重启 Gateway。
 
-当前仓库只负责生成本地报告、QQ Markdown 和附件文件，不包含 QQ 适配器或媒体上传实现。Cron 使用 `local` 投递时不能自动推断 QQ 私聊目标；真实主动推送、图片/文件上传和消息限额需要 Hermes 运行环境、官方 API 和用户授权单独验收。
+当前仓库不包含 QQ Adapter 或媒体上传实现；它提供生成结果、完整正文读取和本地消息分段。手动 QQ 回复仍由 Hermes 已有的入站会话通道完成。Cron 使用 `local` 投递时继续只保存日报，不能自动推断 QQ 私聊目标；真实主动推送、图片/文件上传、适配器发送失败重试和平台消息限额需要 Hermes 运行环境、官方 API 和用户授权单独验收。
 
 完整模块边界、数据流和未验证项见 docs/architecture.md。
 

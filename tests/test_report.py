@@ -9,6 +9,7 @@ from pathlib import Path
 from daily_intelligence.config import RuntimePaths
 from daily_intelligence.report import (
     DailyReportRenderer,
+    read_qq_report,
     save_qq_report,
     save_report,
     split_qq_messages,
@@ -365,6 +366,207 @@ class ReportTestCase(unittest.TestCase):
             ),
         )
         self.assertTrue(attachment.is_file())
+
+    def test_split_qq_messages_adds_date_context_and_preserves_markdown(self) -> None:
+        """QQ 分段应保留日期、章节顺序、代码块和完整链接。"""
+        markdown = (
+            "# 每日技术情报 - 2026-11-22\n\n"
+            "## AI 新闻\n\n"
+            "### 示例新闻\n\n"
+            "正文 https://example.com/a-long-source-link\n\n"
+            "```python\n"
+            "print('中文内容')\n"
+            "```\n\n"
+            "## 创作者动态\n\n"
+            "### B站\n\n"
+            "保留 partial 状态。\n"
+        )
+
+        chunks = split_qq_messages(
+            markdown,
+            max_chars=180,
+        )
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(
+            all(
+                len(chunk) <= 180
+                for chunk in chunks
+            )
+        )
+        self.assertEqual(
+            chunks[0].splitlines()[0],
+            "DailyIntelligence 2026-11-22",
+        )
+        self.assertTrue(
+            all(
+                f"第 {index}/{len(chunks)} 部分" in chunk
+                for index, chunk in enumerate(chunks, 1)
+            )
+        )
+        joined = "\n".join(chunks)
+        self.assertIn(
+            "https://example.com/a-long-source-link",
+            joined,
+        )
+        self.assertIn(
+            "```python",
+            joined,
+        )
+        self.assertIn(
+            "保留 partial 状态。",
+            joined,
+        )
+        self.assertTrue(
+            chunks[-1].endswith(
+                "日报发送完成。"
+            )
+        )
+        self.assertLess(
+            joined.index("## AI 新闻"),
+            joined.index("## 创作者动态"),
+        )
+
+    def test_read_qq_report_returns_complete_utf8_content_and_chunks(self) -> None:
+        """正文读取接口应使用 UTF-8 读回完整 QQ 日报并返回分段。"""
+        report_path = self.runtime_dir / "2026-11-22.qq.md"
+        content = (
+            "# 每日技术情报 - 2026-11-22\n\n"
+            "## 中文章节\n\n"
+            "保留 B站、YouTube 和 partial 状态。\n"
+        )
+        report_path.write_text(
+            content,
+            encoding="utf-8",
+        )
+
+        result = read_qq_report(
+            report_path,
+            max_chars=350,
+        )
+
+        self.assertEqual(
+            result["path"],
+            str(report_path.resolve()),
+        )
+        self.assertEqual(
+            result["report_date"],
+            "2026-11-22",
+        )
+        self.assertEqual(
+            result["content"],
+            content,
+        )
+        self.assertEqual(
+            result["char_count"],
+            len(content),
+        )
+        self.assertEqual(
+            result["message_count"],
+            len(result["messages"]),
+        )
+        self.assertIn(
+            "B站、YouTube 和 partial",
+            result["messages"][0],
+        )
+
+    def test_split_qq_messages_splits_long_plain_text_without_losing_words(self) -> None:
+        """超长普通段落应继续拆分且不静默丢失正文。"""
+        words = " ".join(
+            f"word-{index}"
+            for index in range(120)
+        )
+        markdown = (
+            "# 每日技术情报 - 2026-11-22\n\n"
+            "## 长章节\n\n"
+            f"{words}\n"
+        )
+
+        chunks = split_qq_messages(
+            markdown,
+            max_chars=180,
+        )
+
+        self.assertTrue(
+            all(
+                len(chunk) <= 180
+                for chunk in chunks
+            )
+        )
+        joined = "\n".join(chunks)
+        for index in (
+            0,
+            59,
+            119,
+        ):
+            self.assertIn(
+                f"word-{index}",
+                joined,
+            )
+
+    def test_split_qq_messages_keeps_oversized_code_blocks_fenced(self) -> None:
+        """超长代码块应重复围栏分段，并保留全部代码行。"""
+        code_lines = [
+            f"print('line-{index}')"
+            for index in range(80)
+        ]
+        markdown = (
+            "# 每日技术情报 - 2026-11-22\n\n"
+            "## 代码示例\n\n"
+            "```python\n"
+            + "\n".join(code_lines)
+            + "\n```\n"
+        )
+
+        chunks = split_qq_messages(
+            markdown,
+            max_chars=180,
+        )
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(
+            all(
+                len(chunk) <= 180
+                for chunk in chunks
+            )
+        )
+        joined = "\n".join(chunks)
+        code_chunk_count = len(chunks) - 1
+        for index in (
+            0,
+            39,
+            79,
+        ):
+            self.assertIn(
+                f"print('line-{index}')",
+                joined,
+            )
+        self.assertEqual(
+            joined.count("```python"),
+            code_chunk_count,
+        )
+        self.assertEqual(
+            sum(
+                line.strip() == "```"
+                for chunk in chunks
+                for line in chunk.splitlines()
+            ),
+            code_chunk_count,
+        )
+
+    def test_read_qq_report_rejects_empty_content(self) -> None:
+        """空日报不得被当成生成成功或已发送。"""
+        report_path = self.runtime_dir / "2026-11-22.qq.md"
+        report_path.write_text(
+            "\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "日报正文为空",
+        ):
+            read_qq_report(report_path)
 
     def test_renderer_adds_creator_updates_section_and_failure_status(self) -> None:
         """日报应按平台分类创作者更新并明确显示来源失败。"""

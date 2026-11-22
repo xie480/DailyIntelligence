@@ -135,6 +135,16 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" query
 
 采集命令有按日期的 runs 幂等保护；失败会保存 failed 状态，下次执行允许重试。
 
+手动 QQ 私聊触发“生成今天的日报”时，Skill 必须使用以下顺序，不能根据日期自行拼接路径：
+
+~~~~powershell
+$generation = python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" report --json
+# 校验 JSON 的 ok=true，并把本次返回的 qq_report_path 原样传给下一步
+python -m daily_intelligence read-report --path "<qq_report_path>" --json
+~~~~
+
+`read-report` 会用 UTF-8 完整读回本次 `.qq.md`，返回原始 `content`、字符数和按 QQ 长度拆好的 `messages`。Hermes 应将“今日日报已生成，以下是完整日报正文：”拼接到第一段，再按数组顺序通过当前入站会话发送这些消息；不要单独发送一个提示消息。正文必须保留日期、章节、链接、`partial` 状态和创作者动态；最后一段带有“日报发送完成。”。生成失败、路径缺失、读取失败、正文为空或某段发送失败时，只报告实际错误和文件路径，不把文件落盘当作用户已收到，也不重新运行生成程序。
+
 ## 6. 数据库初始化命令
 
 ~~~~powershell
@@ -145,7 +155,7 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" init-
 
 ## 7. Cron 配置方式
 
-日报 Cron 只负责生成和保存日报，不主动向 QQ Bot 推送消息。请在 Hermes 当前 Profile 中使用已有 cronjob 工具、hermes cron add 或 /cron，并先用目标版本的 help 确认参数：
+日报 Cron 只负责生成和保存日报，不主动向 QQ Bot 推送消息；手动私聊回复由当前入站会话单独完成。请在 Hermes 当前 Profile 中使用已有 cronjob 工具、hermes cron add 或 /cron，并先用目标版本的 help 确认参数：
 
 ~~~~powershell
 hermes cron --help
@@ -173,7 +183,7 @@ hermes cron list
 
 1. 用户在 QQ 私聊中主动询问日报或反馈兴趣。
 2. Hermes 使用当前真实入站消息上下文加载 daily-intelligence-local Skill。
-3. Skill 读取本地日报、SQLite 和画像后生成被动回复。
+3. 用户要求生成日报时，Skill 调用 `report --json`，再用返回的 `qq_report_path` 调用 `read-report --json`，把完整 `messages` 按顺序作为当前会话的被动回复。
 4. 不伪造 message_id，不复用过期上下文，不尝试绕过腾讯官方 API v2 的回复限制。
 
 如果目标环境的入站消息不能交给 Hermes，先检查 Hermes qqbot 平台和 Profile toolset；不要在本项目内重写 QQ 路由。
@@ -185,7 +195,9 @@ hermes cron list
 官方文档当前还注明主动推送能力自 2025-04-21 起不可用；因此本项目把定时任务默认边界设为本地落盘和入站场景下的被动回复，除非目标平台和适配器提供了经过验证的替代投递能力。
 
 - 生成 `reports/YYYY-MM-DD.qq.md` 完整阅读版。
-- 按 `##`/`###` 章节和完整项目/新闻条目拆分消息，并保留原始链接。
+- 用 `read-report` 读取本次生成路径对应的完整正文。
+- 按 `##`/`###` 章节和完整项目/新闻条目拆分消息，保留日期、原始链接、代码块和创作者状态。
+- 最后一段标明“日报发送完成。”；发送失败时返回段序号和文件路径。
 - 提供本地附件文件，等待 Hermes adapter 按官方媒体上传机制处理。
 
 本项目尚未实现或验证：图片/文件的 QQ 媒体上传、真实私聊主动推送、Cron 上下文消息发送、目标会话发现和发送失败重试。创作者平台真实接口、Bilibili Cookie 风控状态、YouTube 频道页面解析也需要目标环境单独验收。未经用户授权不发送真实 QQ 测试消息。

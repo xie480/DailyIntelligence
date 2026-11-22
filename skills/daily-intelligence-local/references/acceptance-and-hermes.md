@@ -54,3 +54,14 @@ When QQ Bot is supplied by Hermes rather than project code, validate the layers 
 4. proactive delivery is separately authorized with a confirmed target, schedule and timezone.
 
 A configured QQ adapter, a connected WebSocket, or a successful local Cron run is not evidence that a real user message was answered or that proactive delivery works. Check channel discovery and the actual `hermes send` target path, then obtain approval for the target, schedule, timezone, and message preview before sending a real test message.
+
+## Manual report response
+
+For a user message such as “生成今天的日报”, the passive reply flow is separate from Cron delivery:
+
+1. Run `report --json` once and require `ok: true`.
+2. Read the returned `qq_report_path` with `read-report --path "<qq_report_path>" --json`.
+3. Require non-empty UTF-8 `content`, prefix `messages[0]` with “今日日报已生成，以下是完整日报正文：”, and send the resulting `messages` in order through the current inbound QQ conversation. Do not send the prefix as a separate message.
+4. Do not derive a filename from the date, rerun generation, or treat file creation as delivery. If reading or sending fails, report the failed stage/part and keep the returned path for retry.
+
+The local splitter preserves section boundaries, complete links, fenced code blocks and `partial` source states. Cron remains local report generation and does not create a second delivery channel.

@@ -461,6 +461,235 @@ class CLITestCase(unittest.TestCase):
         self.assertEqual(captured["timezone"], "Asia/Shanghai")
         self.assertTrue(captured["finalized"])
 
+    def test_report_json_returns_actual_report_and_qq_report_paths(self) -> None:
+        """日报 JSON 结果应返回本次实际生成的两份文件路径。"""
+        output = io.StringIO()
+        with redirect_stdout(output):
+            exit_code = main(
+                [
+                    "--data-dir",
+                    str(self.runtime_dir),
+                    "report",
+                    "--date",
+                    "2026-11-22",
+                    "--no-record",
+                    "--json",
+                ]
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(
+            exit_code,
+            0,
+        )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(
+            payload["report_date"],
+            "2026-11-22",
+        )
+        report_path = Path(payload["report_path"])
+        qq_report_path = Path(payload["qq_report_path"])
+        self.assertTrue(report_path.is_file())
+        self.assertTrue(qq_report_path.is_file())
+        self.assertTrue(
+            qq_report_path.name.endswith(".qq.md")
+        )
+        self.assertNotIn(
+            "日报已保存",
+            output.getvalue(),
+        )
+
+    def test_report_path_can_feed_read_command_without_running_generation_again(self) -> None:
+        """读取本次返回路径时不得再次创建采集或日报生成服务。"""
+        generation_output = io.StringIO()
+        with redirect_stdout(generation_output):
+            self.assertEqual(
+                main(
+                    [
+                        "--data-dir",
+                        str(self.runtime_dir),
+                        "report",
+                        "--date",
+                        "2026-11-22",
+                        "--no-record",
+                        "--json",
+                    ]
+                ),
+                0,
+            )
+        generation_payload = json.loads(
+            generation_output.getvalue()
+        )
+        read_output = io.StringIO()
+        with patch(
+            "daily_intelligence.cli.CreatorUpdatesService",
+            side_effect=AssertionError(
+                "read-report 不应重新生成日报"
+            ),
+        ):
+            with redirect_stdout(read_output):
+                read_exit_code = main(
+                    [
+                        "read-report",
+                        "--path",
+                        generation_payload["qq_report_path"],
+                        "--json",
+                    ]
+                )
+
+        read_payload = json.loads(
+            read_output.getvalue()
+        )
+        self.assertEqual(
+            read_exit_code,
+            0,
+        )
+        self.assertTrue(read_payload["ok"])
+        self.assertEqual(
+            read_payload["path"],
+            generation_payload["qq_report_path"],
+        )
+
+    def test_read_report_json_reads_the_returned_path_without_regeneration(self) -> None:
+        """正文读取命令应读取指定 QQ 路径并返回完整消息序列。"""
+        report_path = self.runtime_dir / "2026-11-22.qq.md"
+        content = (
+            "# 每日技术情报 - 2026-11-22\n\n"
+            "## B站与 YouTube\n\n"
+            "保留中文、Markdown、partial 和原始链接。\n"
+            "[原文](https://example.com/source)\n"
+        )
+        report_path.write_text(
+            content,
+            encoding="utf-8",
+        )
+        output = io.StringIO()
+        with redirect_stdout(output):
+            exit_code = main(
+                [
+                    "read-report",
+                    "--path",
+                    str(report_path),
+                    "--max-chars",
+                    "350",
+                    "--json",
+                ]
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(
+            exit_code,
+            0,
+        )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(
+            payload["content"],
+            content,
+        )
+        self.assertEqual(
+            payload["message_count"],
+            len(payload["messages"]),
+        )
+        self.assertIn(
+            "https://example.com/source",
+            payload["messages"][0],
+        )
+
+    def test_read_report_json_reports_missing_or_empty_file(self) -> None:
+        """正文读取失败时应返回明确失败结果而不是伪造日报内容。"""
+        output = io.StringIO()
+        with redirect_stdout(output):
+            exit_code = main(
+                [
+                    "read-report",
+                    "--path",
+                    str(self.runtime_dir / "missing.qq.md"),
+                    "--json",
+                ]
+            )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(
+            exit_code,
+            1,
+        )
+        self.assertFalse(payload["ok"])
+        self.assertEqual(
+            payload["error_code"],
+            "REPORT_READ_FAILED",
+        )
+        self.assertIn(
+            "missing.qq.md",
+            payload["path"],
+        )
+
+        empty_path = self.runtime_dir / "empty.qq.md"
+        empty_path.write_text(
+            "\n",
+            encoding="utf-8",
+        )
+        empty_output = io.StringIO()
+        with redirect_stdout(empty_output):
+            empty_exit_code = main(
+                [
+                    "read-report",
+                    "--path",
+                    str(empty_path),
+                    "--json",
+                ]
+            )
+
+        empty_payload = json.loads(
+            empty_output.getvalue()
+        )
+        self.assertEqual(
+            empty_exit_code,
+            1,
+        )
+        self.assertFalse(empty_payload["ok"])
+        self.assertIn(
+            "日报正文为空",
+            empty_payload["message"],
+        )
+
+    def test_report_json_generation_failure_does_not_claim_delivery(self) -> None:
+        """日报保存失败时应返回失败 JSON，不尝试读取或宣称已发送。"""
+        output = io.StringIO()
+        with patch(
+            "daily_intelligence.cli.save_qq_report",
+            side_effect=OSError("disk full"),
+        ):
+            with redirect_stdout(output):
+                exit_code = main(
+                    [
+                        "--data-dir",
+                        str(self.runtime_dir),
+                        "report",
+                        "--date",
+                        "2026-11-22",
+                        "--json",
+                    ]
+                )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(
+            exit_code,
+            1,
+        )
+        self.assertFalse(payload["ok"])
+        self.assertEqual(
+            payload["error_code"],
+            "REPORT_GENERATION_FAILED",
+        )
+        self.assertNotIn(
+            "qq_report_path",
+            payload,
+        )
+        self.assertNotIn(
+            "日报已发送",
+            output.getvalue(),
+        )
+
     def test_init_feedback_profile_and_report_commands(self) -> None:
         """初始化、反馈、查看画像和指定日期日报应可连续执行。"""
         common = [

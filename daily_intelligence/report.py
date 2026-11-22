@@ -31,6 +31,7 @@ CREATOR_SECTION_DEFINITIONS = (
     ("youtube", "video", "今日 YouTube 新视频"),
 )
 QQ_DEFAULT_MAX_CHARS = 3500
+QQ_COMPLETION_MARKER = "日报发送完成。"
 
 
 class DailyReportRenderer:
@@ -754,7 +755,7 @@ def split_qq_messages(
     markdown: str,
     max_chars: int = QQ_DEFAULT_MAX_CHARS,
 ) -> list[str]:
-    """按章节和完整条目拆分 QQ Markdown，并为每段添加连续序号。"""
+    """按章节和完整条目拆分 QQ Markdown，并为每段添加日期和序号。"""
     if max_chars < 100:
         raise ValueError(
             "max_chars 必须至少为 100"
@@ -762,28 +763,21 @@ def split_qq_messages(
     normalized = markdown.strip()
     if not normalized:
         return []
-    budget = max(
-        1,
-        max_chars - 20,
-    )
-    parts = re.split(
-        r"(?=^## )",
+    report_date = _extract_report_date(
         normalized,
-        flags=re.MULTILINE,
     )
-    preamble = parts[0].strip()
-    sections = [
-        part.strip()
-        for part in parts[1:]
-        if part.strip()
-    ]
+    budget = _message_content_budget(
+        max_chars,
+        report_date,
+    )
+    parts = _split_markdown_sections(
+        normalized,
+    )
     units: list[str] = []
-    if preamble:
-        units.append(preamble)
-    for section in sections:
+    for section in parts:
         units.extend(
             _split_qq_section(
-                section,
+                section.strip(),
                 budget,
             )
         )
@@ -803,42 +797,446 @@ def split_qq_messages(
     if current:
         chunks.append(current)
     total = len(chunks)
-    return [
-        f"第 {index}/{total} 条\n\n{chunk}"
-        for index, chunk in enumerate(
-            chunks,
-            1,
+    messages: list[str] = []
+    for index, chunk in enumerate(
+        chunks,
+        1,
+    ):
+        message = (
+            f"{_message_header(report_date, index, total)}\n\n"
+            f"{chunk}"
         )
-    ]
+        if index == total:
+            message += f"\n\n{QQ_COMPLETION_MARKER}"
+        messages.append(message)
+    return messages
 
 
 def _split_qq_section(
     section: str,
     budget: int,
 ) -> list[str]:
-    """在超长章节内按三级标题拆分，避免截断项目或新闻。"""
+    """在超长章节内按三级标题和完整行拆分，避免截断条目。"""
     if len(section) <= budget:
         return [section]
-    blocks = re.split(
-        r"(?=^### )",
+    blocks = _split_markdown_blocks(
         section,
-        flags=re.MULTILINE,
     )
     if len(blocks) <= 1:
-        return [section]
+        section_lines = section.splitlines()
+        section_heading = ""
+        section_body = section
+        if section_lines and section_lines[0].strip().startswith(
+            "## "
+        ):
+            section_heading = section_lines[0].strip()
+            section_body = "\n".join(
+                section_lines[1:]
+            ).strip()
+        if not section_heading:
+            return _split_text_without_truncating(
+                section,
+                budget,
+            )
+        body_budget = max(
+            1,
+            budget - len(section_heading) - 2,
+        )
+        return [
+            f"{section_heading}\n\n{part}"
+            for part in _split_text_without_truncating(
+                section_body,
+                body_budget,
+            )
+        ]
     heading = blocks[0].strip()
     result: list[str] = []
-    current = heading
     for block in blocks[1:]:
-        candidate = f"{current}\n\n{block.strip()}"
-        if current != heading and len(candidate) > budget:
-            result.append(current)
-            current = f"{heading}\n\n{block.strip()}"
+        block_text = block.strip()
+        block_lines = block_text.splitlines()
+        block_heading = ""
+        if block_lines and block_lines[0].strip().startswith(
+            "### "
+        ):
+            block_heading = block_lines[0].strip()
+            block_text = "\n".join(
+                block_lines[1:]
+            ).strip()
+        context = "\n\n".join(
+            value
+            for value in (
+                heading,
+                block_heading,
+            )
+            if value
+        )
+        block_budget = max(
+            1,
+            budget - len(context) - 2,
+        )
+        for part in _split_text_without_truncating(
+            block_text,
+            block_budget,
+        ):
+            result.append(
+                f"{context}\n\n{part}"
+            )
+    return result
+
+
+def read_qq_report(
+    report_path: Path | str,
+    max_chars: int = QQ_DEFAULT_MAX_CHARS,
+) -> dict[str, Any]:
+    """以 UTF-8 读取指定 QQ 日报，并返回完整正文和消息分段。"""
+    resolved_path = Path(
+        report_path
+    ).expanduser().resolve()
+    if not resolved_path.name.endswith(
+        ".qq.md"
+    ):
+        raise ValueError(
+            f"日报正文接口只接受 .qq.md 文件：{resolved_path}"
+        )
+    try:
+        content = resolved_path.read_text(
+            encoding="utf-8",
+        )
+    except UnicodeError as error:
+        raise ValueError(
+            f"日报文件不是有效 UTF-8：{resolved_path}"
+        ) from error
+    except OSError as error:
+        raise OSError(
+            f"日报文件读取失败：{resolved_path}：{error}"
+        ) from error
+    if not content.strip():
+        raise ValueError(
+            f"日报正文为空：{resolved_path}"
+        )
+    messages = split_qq_messages(
+        content,
+        max_chars=max_chars,
+    )
+    if not messages:
+        raise ValueError(
+            f"日报正文为空：{resolved_path}"
+        )
+    return {
+        "path": str(resolved_path),
+        "report_date": _extract_report_date(
+            content,
+        ),
+        "content": content,
+        "char_count": len(content),
+        "message_count": len(messages),
+        "messages": messages,
+    }
+
+
+def _extract_report_date(
+    markdown: str,
+) -> str | None:
+    """从日报标题或生成时间中提取逻辑日期。"""
+    match = re.search(
+        r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)",
+        markdown,
+    )
+    return match.group(1) if match else None
+
+
+def _message_header(
+    report_date: str | None,
+    index: int,
+    total: int,
+) -> str:
+    """生成每条 QQ 消息都携带的日报日期和连续序号。"""
+    date_text = report_date or "日报"
+    return (
+        f"DailyIntelligence {date_text}\n"
+        f"第 {index}/{total} 部分"
+    )
+
+
+def _message_content_budget(
+    max_chars: int,
+    report_date: str | None,
+) -> int:
+    """为消息序号头预留空间，保证正常分段不超过消息上限。"""
+    reserve = len(
+        _message_header(
+            report_date,
+            999999,
+            999999,
+        )
+    ) + len(
+        f"\n\n{QQ_COMPLETION_MARKER}"
+    )
+    return max(
+        1,
+        max_chars - reserve,
+    )
+
+
+def _split_markdown_sections(
+    markdown: str,
+) -> list[str]:
+    """按顶层二级标题拆分 Markdown，同时避开 fenced code block。"""
+    return _split_markdown_at_heading(
+        markdown,
+        "## ",
+    )
+
+
+def _split_markdown_blocks(
+    markdown: str,
+) -> list[str]:
+    """按顶层三级标题拆分 Markdown，同时避开 fenced code block。"""
+    return _split_markdown_at_heading(
+        markdown,
+        "### ",
+    )
+
+
+def _split_markdown_at_heading(
+    markdown: str,
+    heading_prefix: str,
+) -> list[str]:
+    """在未进入代码块时按标题切分，并保留每个切片的原文。"""
+    lines = markdown.splitlines()
+    parts: list[str] = []
+    current: list[str] = []
+    fence: str | None = None
+    for line in lines:
+        stripped = line.strip()
+        is_fence = stripped.startswith(
+            (
+                "```",
+                "~~~",
+            )
+        )
+        if (
+            not current
+            or fence is not None
+            or not stripped.startswith(heading_prefix)
+        ):
+            current.append(line)
+        else:
+            parts.append(
+                "\n".join(current).strip()
+            )
+            current = [line]
+        if is_fence:
+            marker = stripped[:3]
+            if fence is None:
+                fence = marker
+            elif marker == fence:
+                fence = None
+    if current:
+        parts.append(
+            "\n".join(current).strip()
+        )
+    return [
+        part
+        for part in parts
+        if part
+    ]
+
+
+def _split_text_without_truncating(
+    text: str,
+    budget: int,
+) -> list[str]:
+    """按完整行和完整代码块切分文本，不截断 URL 或 Markdown。"""
+    if len(text) <= budget:
+        return [text]
+    lines = text.splitlines()
+    units: list[str] = []
+    current: list[str] = []
+    fence: str | None = None
+    for line in lines:
+        stripped = line.strip()
+        is_fence = stripped.startswith(
+            (
+                "```",
+                "~~~",
+            )
+        )
+        current.append(line)
+        if is_fence:
+            marker = stripped[:3]
+            if fence is None:
+                fence = marker
+            elif marker == fence:
+                fence = None
+        if fence is None and line.strip() == "":
+            units.append(
+                "\n".join(current).strip()
+            )
+            current = []
+    if current:
+        units.append(
+            "\n".join(current).strip()
+        )
+    if not units:
+        return [text]
+    expanded_units: list[str] = []
+    for unit in units:
+        expanded_units.extend(
+            _split_oversized_unit(
+                unit,
+                budget,
+            )
+        )
+    units = expanded_units
+    chunks: list[str] = []
+    current_text = ""
+    for unit in units:
+        candidate = (
+            f"{current_text}\n\n{unit}"
+            if current_text
+            else unit
+        )
+        if current_text and len(candidate) > budget:
+            chunks.append(current_text)
+            current_text = unit
+        else:
+            current_text = candidate
+    if current_text:
+        chunks.append(current_text)
+    return chunks
+
+
+def _split_oversized_unit(
+    text: str,
+    budget: int,
+) -> list[str]:
+    """拆分超长普通文本，保留 Markdown 链接和代码块完整性。"""
+    if len(text) <= budget:
+        return [text]
+    if "```" in text or "~~~" in text:
+        fenced_parts = _split_oversized_fenced_block(
+            text,
+            budget,
+        )
+        if fenced_parts is not None:
+            return fenced_parts
+        return [text]
+    tokens = re.findall(
+        r"\[[^\]\n]+\]\([^\)\n]+\)|https?://\S+|\S+",
+        text,
+    )
+    if not tokens or any(
+        len(token) > budget
+        for token in tokens
+    ):
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    for token in tokens:
+        candidate = (
+            f"{current} {token}"
+            if current
+            else token
+        )
+        if current and len(candidate) > budget:
+            chunks.append(current)
+            current = token
         else:
             current = candidate
     if current:
-        result.append(current)
-    return result
+        chunks.append(current)
+    return chunks
+
+
+def _split_oversized_fenced_block(
+    text: str,
+    budget: int,
+) -> list[str] | None:
+    """为超长 fenced code block 重复围栏并分段，避免破坏 Markdown。"""
+    lines = text.splitlines()
+    opening_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.strip().startswith(
+                (
+                    "```",
+                    "~~~",
+                )
+            )
+        ),
+        None,
+    )
+    if opening_index is None:
+        return None
+    opening = lines[opening_index].strip()
+    marker = opening[:3]
+    closing_index = next(
+        (
+            index
+            for index in range(
+                opening_index + 1,
+                len(lines),
+            )
+            if lines[index].strip() == marker
+        ),
+        None,
+    )
+    if closing_index is None:
+        return None
+    if any(
+        line.strip()
+        for line in lines[:opening_index]
+    ) or any(
+        line.strip()
+        for line in lines[closing_index + 1:]
+    ):
+        return None
+    body_lines = lines[opening_index + 1:closing_index]
+    body_budget = budget - len(opening) - len(marker) - 2
+    if body_budget < 1:
+        return None
+    if any(
+        len(line) > body_budget
+        for line in body_lines
+    ):
+        return None
+    chunks: list[str] = []
+    current: list[str] = []
+    current_length = 0
+    for line in body_lines:
+        line_length = len(line)
+        separator_length = 1 if current else 0
+        if (
+            current
+            and current_length + separator_length + line_length
+            > body_budget
+        ):
+            chunks.append(
+                "\n".join(
+                    [
+                        opening,
+                        *current,
+                        marker,
+                    ]
+                )
+            )
+            current = []
+            current_length = 0
+        current.append(line)
+        current_length += separator_length + line_length
+    if current or not body_lines:
+        chunks.append(
+            "\n".join(
+                [
+                    opening,
+                    *current,
+                    marker,
+                ]
+            )
+        )
+    return chunks
 
 
 def save_report(

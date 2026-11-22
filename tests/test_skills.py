@@ -90,6 +90,12 @@ class SkillLayoutTestCase(unittest.TestCase):
             "import-handoff",
             "search_status",
             "QQ 主动推送",
+            "qq_report_path",
+            "read-report",
+            "完整日报正文",
+            "不重新生成",
+            "日报发送完成",
+            "发送失败",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(

@@ -37,6 +37,8 @@ from .profile import InterestProfileStore
 from .recommendations import RecommendationEngine
 from .report import (
     DailyReportRenderer,
+    QQ_DEFAULT_MAX_CHARS,
+    read_qq_report,
     save_qq_report,
     save_report,
 )
@@ -295,6 +297,35 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="不写入推荐历史",
     )
+    report_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="输出本次生成的结构化路径结果",
+    )
+
+    read_report_parser = subparsers.add_parser(
+        "read-report",
+        aliases=[
+            "read-qq-report",
+        ],
+        help="读取已生成的 QQ Markdown 日报正文，不重新生成",
+    )
+    read_report_parser.add_argument(
+        "--path",
+        required=True,
+        help="本次 report 命令返回的 .qq.md 路径",
+    )
+    read_report_parser.add_argument(
+        "--max-chars",
+        type=int,
+        default=QQ_DEFAULT_MAX_CHARS,
+        help="单条 QQ 消息最大字符数",
+    )
+    read_report_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="输出完整正文和消息分段 JSON",
+    )
 
     creator_parser = subparsers.add_parser(
         "creator",
@@ -456,6 +487,8 @@ def _dispatch(
         "query": _query,
         "profile": _profile,
         "report": _report,
+        "read-report": _read_report,
+        "read-qq-report": _read_report,
         "creator": _creator,
         "dry-run": _dry_run,
     }
@@ -914,9 +947,19 @@ def _profile(
 def _report(
     args: argparse.Namespace,
 ) -> int:
-    """生成、保存并打印指定日期的日报路径。"""
-    paths, database, profile = _runtime(args)
+    """生成日报，并按需返回本次实际生成文件的结构化路径。"""
+    database: Database | None = None
+    report_path: Path | None = None
+    qq_report_path: Path | None = None
+    json_output = bool(
+        getattr(
+            args,
+            "json",
+            False,
+        )
+    )
     try:
+        paths, database, profile = _runtime(args)
         window_end = creator_now(
             args.timezone,
         )
@@ -969,7 +1012,7 @@ def _report(
             markdown,
             report_date,
         )
-        save_qq_report(
+        qq_report_path = save_qq_report(
             paths,
             renderer.render_qq(
                 results,
@@ -990,10 +1033,112 @@ def _report(
                 rendered_results,
                 report_date=report_date,
             )
-        print(f"日报已保存：{report_path}")
+        if json_output:
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "command": "report",
+                        "report_date": report_date.isoformat(),
+                        "report_path": str(
+                            report_path.resolve()
+                        ),
+                        "qq_report_path": str(
+                            qq_report_path.resolve()
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            print(f"日报已保存：{report_path}")
+            print(f"QQ 阅读版已保存：{qq_report_path}")
         return 0
+    except Exception as error:
+        if json_output:
+            payload: dict[str, Any] = {
+                "ok": False,
+                "command": "report",
+                "error_code": "REPORT_GENERATION_FAILED",
+                "message": str(error),
+            }
+            if report_path is not None:
+                payload["report_path"] = str(
+                    report_path.resolve()
+                )
+            if qq_report_path is not None:
+                payload["qq_report_path"] = str(
+                    qq_report_path.resolve()
+                )
+            print(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                )
+            )
+            return 1
+        raise
     finally:
-        database.close()
+        if database is not None:
+            database.close()
+
+
+def _read_report(
+    args: argparse.Namespace,
+) -> int:
+    """读取指定 QQ 日报正文并返回完整内容与发送分段。"""
+    json_output = bool(
+        getattr(
+            args,
+            "json",
+            False,
+        )
+    )
+    resolved_path = str(
+        Path(
+            args.path
+        ).expanduser().resolve()
+    )
+    try:
+        result = read_qq_report(
+            args.path,
+            max_chars=args.max_chars,
+        )
+    except Exception as error:
+        payload = {
+            "ok": False,
+            "command": "read-report",
+            "error_code": "REPORT_READ_FAILED",
+            "path": resolved_path,
+            "message": str(error),
+        }
+        if json_output:
+            print(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                )
+            )
+            return 1
+        raise
+    if json_output:
+        payload = {
+            "ok": True,
+            "command": "read-report",
+            **result,
+        }
+        print(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    print(
+        result["content"],
+        end="",
+    )
+    return 0
 
 
 def _creator_collection_status(
