@@ -19,6 +19,7 @@ metadata:
 - 用户询问今天的技术日报、历史日报或重点推荐。
 - 用户要求采集 GitHub、RSS 或刷新推荐。
 - 用户要求每周总结、查看或修改兴趣偏好。
+- 用户通过 QQ Bot 添加、查看、暂停、恢复或删除 Bilibili/YouTube 创作者账号。
 - Hermes Cron 需要执行一次本地采集和日报保存。
 
 ## 执行流程
@@ -30,9 +31,25 @@ metadata:
 5. 让 SQLite 完成 URL、指纹、相似度和运行键去重。
 6. 读取 interest-profile 的 JSON 画像和 SQLite 反馈历史。
 7. 使用 RecommendationEngine 生成可解释排序，明确反馈优先于隐式信号，同时为高重要性的新领域内容保留探索位。
-8. 通过 DailyReportRenderer 生成并保存当天 Markdown 日报和 QQ Markdown 阅读版。
-9. 生成后必须读取主 Markdown 和 QQ Markdown，核对逻辑日期、板块、来源状态、展示数量与重点推荐；CLI 返回成功只证明流程返回，不证明报告内容完整或正确。
-10. 回复用户时只引用数据库或日报中的来源链接；没有来源就说明信息未验证。
+8. 运行 `report` 时由 Daily Intelligence 在任务启动时固定 `window_end`，按账号和内容类型采集 Bilibili 视频、Bilibili 动态和 YouTube Atom Feed；先保存事件，主报告和 QQ Markdown 都成功后才推进检查点。
+9. 通过 DailyReportRenderer 生成并保存当天 Markdown 日报和 QQ Markdown 阅读版，创作者章节与原有日报合并，不创建第二份日报。
+10. 生成后必须读取主 Markdown 和 QQ Markdown，核对逻辑日期、板块、来源状态、展示数量与重点推荐；CLI 返回成功只证明流程返回，不证明报告内容完整或正确。
+11. 回复用户时只引用数据库或日报中的来源链接；没有来源就说明信息未验证。
+
+## 创作者账号管理
+
+用户可以使用自然语言表达添加、查看、删除、暂停、恢复和修改监控类型的意图。Skill 将消息中的主页链接和稳定发送者 owner 映射为以下本地命令；不要要求用户维护 YAML 或手写 UID：
+
+~~~~powershell
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator add --owner-key <authorized-owner> <URL> [<URL> ...]
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator list --owner-key <authorized-owner>
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator pause <bilibili|youtube> <account-key> --owner-key <authorized-owner>
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator resume <bilibili|youtube> <account-key> --owner-key <authorized-owner>
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator configure <bilibili|youtube> <account-key> --owner-key <authorized-owner> [--no-videos] [--no-dynamics]
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator remove <bilibili|youtube> <account-key> --owner-key <authorized-owner>
+~~~~
+
+`CREATOR_ADMIN_KEYS` 必须在本机 `.env` 中预先配置，`owner-key` 不能直接信任用户文本。Bilibili 默认启用视频和动态，YouTube 只启用视频；直播、YouTube 社区帖子和实时通知都不在范围内。用户只发送链接且没有添加意图时，先询问一次是否添加。
 
 ## Hermes Web Search 交接
 

@@ -9,6 +9,8 @@ Daily Intelligence 是一个面向 Hermes Agent 的轻量个人技术情报系�
 - 通过 URL、内容指纹和标准库文本相似度做三层去重。
 - 通过 JSON 画像和 SQLite 反馈历史进行可解释推荐。
 - 生成 YYYY-MM-DD.md 日报，供 Hermes Skill 或用户主动查询。
+- 在日报生成时按固定时间窗口采集 Bilibili UP 主视频、动态和 YouTube 频道视频。
+- 通过授权 owner 的 CLI/Skill 管理创作者账号；不运行常驻 CreatorRadar 进程。
 - 由 Hermes 原生 `web_search`/`web_extract` 搜索并核实 AI、Agent、软件开发新闻，通过 `config/hermes-handoff.json` 与 Python 交接。
 - 获取最终 GitHub 候选项目 README，保存结构化项目分析、证据链接和完整元数据。
 - 生成完整 Markdown、QQ Markdown 阅读版和按项目/新闻边界拆分的消息片段。
@@ -23,7 +25,10 @@ DailyIntelligence/
 ├── daily_intelligence/
 │   ├── collectors/
 │   │   ├── github.py
-│   │   └── rss.py
+│   │   ├── rss.py
+│   │   └── creators.py
+│   ├── creator_service.py
+│   ├── creator_urls.py
 │   ├── cli.py
 │   ├── config.py
 │   ├── database.py
@@ -55,6 +60,8 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" impor
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" report
 ~~~~
 
+`report` 会在任务启动时固定创作者采集截止时间，并在原有日报中追加“创作者动态追踪”章节。没有监控账号时只显示未配置状态。
+
 只查看推荐，不写推荐历史：
 
 ~~~~powershell
@@ -81,6 +88,11 @@ python -m daily_intelligence --data-dir "$env:TEMP\daily-intelligence-manual" dr
 | query TOPIC | 记录一次主动查询主题，三次重复查询后小幅增加权重 |
 | profile show/reset/enable/disable | 查看或管理画像 |
 | report | 按推荐结果保存 Markdown 日报，支持 --date YYYY-MM-DD |
+| creator add URL... | 添加一个或多个 Bilibili/YouTube 监控账号 |
+| creator list | 查看当前 owner 的监控账号 |
+| creator pause/resume PLATFORM KEY | 暂停或恢复账号 |
+| creator configure PLATFORM KEY | 修改视频/动态监控类型 |
+| creator remove PLATFORM KEY | 删除账号及其创作者事件 |
 | dry-run | 使用固定样例渲染日报，不建立运行数据 |
 
 全局参数必须放在子命令前：
@@ -88,6 +100,17 @@ python -m daily_intelligence --data-dir "$env:TEMP\daily-intelligence-manual" dr
 ~~~~powershell
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" --timezone "Asia/Shanghai" report
 ~~~~
+
+创作者管理命令必须使用已经配置在 `CREATOR_ADMIN_KEYS` 中的稳定 owner：
+
+~~~~powershell
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator add --owner-key "qq:user-123" "https://space.bilibili.com/123456"
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator add --owner-key "qq:user-123" "https://www.youtube.com/@example"
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator list --owner-key "qq:user-123"
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator pause bilibili 123456 --owner-key "qq:user-123"
+~~~~
+
+Bilibili 默认开启视频和动态监控，YouTube 只开启视频监控；直播、YouTube 社区帖子和 Bilibili 直播不会被采集。`@handle` 与旧式 YouTube 频道链接会先解析真实 Channel ID，解析失败时不会写入错误账号。
 
 ## 配置与运行数据
 
@@ -105,6 +128,8 @@ GitHub Token 是可选的。项目根目录的 `.env` 用作本项目独立的�
 
 GitHub 专用代理使用 `GITHUB_PROXY` 配置，优先级为进程级 `GITHUB_PROXY`、项目 `.env` 中的 `GITHUB_PROXY`、Python 自动代理发现。显式代理会同时用于 GitHub API 的 HTTP/HTTPS 请求，并覆盖 `HTTP_PROXY`、`HTTPS_PROXY` 和 `ALL_PROXY`；显式配置无效或与 `NO_PROXY` 冲突时直接报错，不会静默直连。`.env.example` 使用 `http://127.0.0.1:7890` 作为示例地址，需按本机代理客户端实际监听地址调整。
 
+创作者管理使用 `CREATOR_ADMIN_KEYS` 配置授权 owner，多个值用逗号或分号分隔；可选的 `CREATOR_OWNER_KEY` 仅用于省略 CLI 参数。Bilibili 动态接口需要 Cookie 时在本机 `.env` 设置 `BILIBILI_COOKIE`，该值只在内存中用于请求，不写入 SQLite、日志、日报或 Git。
+
 配置模块根据源码位置解析项目根目录，不依赖当前工作目录、Hermes Gateway 环境继承或 GitHub CLI。GitHub API 的 Token 只在进程运行时由统一配置模块读取，请求固定使用 `https://api.github.com`、`Accept: application/vnd.github+json`、`X-GitHub-Api-Version: 2022-11-28` 和 `User-Agent: DailyIntelligence`；Token 只放在 `Authorization: Bearer ...` 请求头中，不进入 URL、数据库或缓存。客户端拒绝非 HTTPS、非 `api.github.com` 地址和重定向，并把错误中的 Token 清理后再交给 CLI。401 会提示 Token 无效或已过期，403/429 按限流响应头和有限指数退避处理。
 
 限流和暂时性网络错误最多重试 2 次，单次等待上限为 30 秒；数值或 HTTP-date `Retry-After`、`X-RateLimit-Reset` 会被尊重，超过上限时立即返回脱敏错误。ETag 和响应体只保存在当前 `GitHubClient` 实例的有限内存缓存中，不写入运行数据目录。
@@ -121,7 +146,7 @@ python -m unittest discover -s tests -v
 
 ## Hermes 使用方式
 
-将 `E:\YilenaCode\DailyIntelligence\skills\daily-intelligence-local` 及其他三个 Skill 作为 Hermes 外部只读 Skills 目录，或按 deployment/HERMES_INSTALL.md 复制到目标 Profile 的 Skills 目录。完整日报流程由 `daily-intelligence-local` 编排：先运行 GitHub/RSS 采集，再让 Hermes 用 `web_search` 覆盖三个新闻领域、用 `web_extract` 核实原文，写入交接 JSON，执行 `import-handoff` 后生成完整和 QQ Markdown 日报。QQ Bot 用户主动提问时由同一 Skill 读取日报、数据库和画像后被动回复。
+将 `E:\YilenaCode\DailyIntelligence\skills\daily-intelligence-local` 及其他三个 Skill 作为 Hermes 外部只读 Skills 目录，或按 deployment/HERMES_INSTALL.md 复制到目标 Profile 的 Skills 目录。完整日报流程由 `daily-intelligence-local` 编排：先运行 GitHub/RSS 采集，再让 Hermes 用 `web_search` 覆盖三个新闻领域、用 `web_extract` 核实原文，写入交接 JSON，执行 `import-handoff` 后运行 `report`。`report` 会在同一任务内按账号和内容类型采集创作者更新，最后生成完整和 QQ Markdown 日报。QQ Bot 用户主动提问或管理账号时由同一 Skill 读取日报、数据库和画像后被动回复。
 
 当前仓库只负责生成本地报告、QQ Markdown 和附件文件，不包含 QQ 适配器或媒体上传实现。Cron 使用 `local` 投递时不能自动推断 QQ 私聊目标；真实主动推送、图片/文件上传和消息限额需要 Hermes 运行环境、官方 API 和用户授权单独验收。
 

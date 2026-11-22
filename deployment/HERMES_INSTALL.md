@@ -26,6 +26,7 @@
 - Hermes Home 为 E:\HermesData。
 - Hermes 配置示例支持 skills.external_dirs，并将外部目录作为只读 Skills 源。
 - Hermes 的 qqbot 工具集已经存在，当前项目不需要新增消息 Adapter。
+- Daily Intelligence 的 SQLite schema 已增量升级到 v2，创作者账号、事件和检查点仍保存在同一个 `intelligence.db`。
 - Hermes 当前可用的原生联网工具名称已从只读 Profile/请求转储确认是 `web_search` 和 `web_extract`；Python 不直接调用这两个 Agent 工具。
 - 当前只读检查到的 Hermes Cron 配置没有 Daily Intelligence Report 任务，不能把旧配置或用户任务描述当作当前已生效状态。
 
@@ -61,6 +62,17 @@ if (-not (Test-Path ".env")) {
 项目当前进程中的 `GITHUB_TOKEN` 仍优先于 `.env`；没有 Token 时使用匿名公开 API。不要把真实 Token 写入 PowerShell 历史、sources.json、日报或日志。Hermes 只负责调度，不需要向 Python 子进程传递 Token。
 
 GitHub API 专用代理通过项目 `.env` 的 `GITHUB_PROXY` 配置，例如 `GITHUB_PROXY=http://127.0.0.1:7890`。进程级 `GITHUB_PROXY` 优先于项目文件；未配置时才使用 Python 自动代理发现。该配置只作用于 GitHubClient，不会修改 Hermes、Windows 系统代理或 RSS 客户端。显式代理不可用或被 `NO_PROXY` 绕过时，命令会明确失败。
+
+创作者账号管理需要在项目 `.env` 中配置授权 owner 白名单：
+
+~~~~dotenv
+CREATOR_ADMIN_KEYS=qq:user-123
+CREATOR_OWNER_KEY=qq:user-123
+# Bilibili 动态接口需要时再填写，不能提交真实 Cookie
+BILIBILI_COOKIE=
+~~~~
+
+`CREATOR_ADMIN_KEYS` 只保存稳定 owner 标识，不保存完整 QQ 消息；`BILIBILI_COOKIE` 只由 Python 进程读取，不进入数据库、日志或日报。
 
 ## 4. Skills 源文件和安装目标发现
 
@@ -157,6 +169,8 @@ hermes cron list
 
 如果目标环境的入站消息不能交给 Hermes，先检查 Hermes qqbot 平台和 Profile toolset；不要在本项目内重写 QQ 路由。
 
+账号管理由同一个本地 Skill 路由到 `creator` CLI。自然语言意图包括“添加这个 UP 主/频道”“查看监控账号”“删除/暂停/恢复账号”和“只监控视频/动态”；Skill 必须传入已授权的稳定 owner key。支持一次消息中的多个主页链接，Bilibili 默认视频与动态均开启，YouTube 仅视频。账号管理不会创建新的定时任务，也不会发送实时通知。
+
 腾讯 QQ 开放平台官方文档列出的消息类型包括文本、Markdown 和媒体；接口的主动推送、Markdown 模板审批、URL 白名单、媒体上传和频率限制必须按目标机器人和 Hermes adapter 的实际配置验证，不能只凭本地文件生成成功来宣称已打通。参考：[QQ 官方消息发送与接收文档](https://github.com/tencent-connect/bot-docs/blob/main/docs/develop/api-v2/server-inter/message/send-receive/send.md)。本项目当前只完成：
 
 官方文档当前还注明主动推送能力自 2025-04-21 起不可用；因此本项目把定时任务默认边界设为本地落盘和入站场景下的被动回复，除非目标平台和适配器提供了经过验证的替代投递能力。
@@ -165,13 +179,13 @@ hermes cron list
 - 按 `##`/`###` 章节和完整项目/新闻条目拆分消息，并保留原始链接。
 - 提供本地附件文件，等待 Hermes adapter 按官方媒体上传机制处理。
 
-本项目尚未实现或验证：图片/文件的 QQ 媒体上传、真实私聊主动推送、Cron 上下文消息发送、目标会话发现和发送失败重试。未经用户授权不发送真实 QQ 测试消息。
+本项目尚未实现或验证：图片/文件的 QQ 媒体上传、真实私聊主动推送、Cron 上下文消息发送、目标会话发现和发送失败重试。创作者平台真实接口、Bilibili Cookie 风控状态、YouTube 频道页面解析也需要目标环境单独验收。未经用户授权不发送真实 QQ 测试消息。
 
 ## 9. 四个 Skills 的职责和结构化交接
 
 | Skill | 职责 |
 | --- | --- |
-| `daily-intelligence-local` | 总入口、用户查询路由、Cron 编排、调用 `web_search`/`web_extract`、运行 `import-handoff`/`report`、生成 QQ 预览 |
+| `daily-intelligence-local` | 总入口、用户查询和创作者账号管理路由、Cron 编排、调用 `web_search`/`web_extract`、运行 `import-handoff`/`report`、生成 QQ 预览 |
 | `github-radar` | GitHub 候选、元数据、Release、最终候选 README、项目分析证据和热点/有趣项目分区 |
 | `tech-news-radar` | RSS 补充、三个领域各至少两组 Web Search 查询、原文核实、时间和状态、跨来源去重 |
 | `interest-profile` | 查询信号、喜欢/收藏/不感兴趣/深入了解、主题权重、排除和探索推荐 |

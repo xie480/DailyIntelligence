@@ -1,5 +1,20 @@
 # Changelog
 
+## [创作者动态增量改造] - 2026-11-22
+
+### Added
+
+- SQLite v2 创作者账号、授权 owner、事件、来源运行和独立检查点表，沿用原有数据库和事务。
+- Bilibili 投稿分页、WBI 签名、空间动态游标、文字/图片/转发/专栏分类和 BV/Dynamic ID 去重。
+- YouTube 公开 Atom Feed、`/channel/UC...`、`/@handle` 与旧式频道页解析，不依赖 Data API Key。
+- `creator add/list/pause/resume/configure/remove` CLI 与 `daily-intelligence-local` Skill 的自然语言管理路由。
+- 日报“创作者动态追踪”章节、QQ Markdown 同步渲染、失败状态和报告成功后检查点推进。
+
+### Verification boundary
+
+- 创作者 URL、时间窗口、分页/Feed Fixture、失败隔离、幂等事件、CLI 和日报整合使用本地 unittest 验证。
+- 真实 Bilibili 接口、Cookie 风控、YouTube 频道页、Hermes Cron、QQ 入站和实际消息投递仍需目标环境单独验收。
+
 ## [第三轮升级] - 2026-11-22
 
 ### Added

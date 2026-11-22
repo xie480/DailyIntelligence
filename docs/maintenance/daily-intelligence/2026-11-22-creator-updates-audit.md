@@ -69,3 +69,32 @@ report         → RecommendationEngine → DailyReportRenderer → reports/*.md
 | Bilibili Cookie | 只从环境变量或本地受保护配置读取，不写入数据库、日志或 Git |
 
 本轮单元测试使用 Fixture/Stub，不依赖真实 Bilibili、YouTube、Hermes 或 QQ 网络；真实平台接口、Cron 和 QQ 投递属于部署后验证项。
+
+## 6. 已完成的核心修改
+
+- `daily_intelligence/database.py` 将 schema 升级为 v2，新增 `creator_authorizations`、`creator_accounts`、`creator_checkpoints`、`creator_events`、`creator_source_runs`；v1 表和历史数据保持不变。
+- `daily_intelligence/creator_urls.py` 解析 Bilibili UID、YouTube Channel ID、`@handle` 和可尝试解析的旧式频道链接。
+- `daily_intelligence/collectors/creators.py` 提供标准库 HTTP 客户端、有限重试/退避、Bilibili WBI、投稿分页、动态游标、YouTube Atom Feed 和统一 `CreatorUpdate`。
+- `daily_intelligence/creator_service.py` 提供授权账号 CRUD、首次 24 小时/新账号窗口、来源失败隔离、事件幂等保存和报告成功后最终化。
+- `daily_intelligence/cli.py` 在既有 `report` 入口中固定本次 `window_end`，增加 `creator` 管理命令；`daily_intelligence/report.py` 追加创作者动态章节，不改变原有板块和 QQ 拆分边界。
+- `.env.example`、README、Hermes Skill、部署说明和 CHANGELOG 补充 owner 白名单、Bilibili Cookie、自然语言管理和验证边界。
+
+## 7. 时间窗口与检查点
+
+所有平台发布时间和窗口都转换成 UTC 带时区 ISO 时间，业务默认时区仍是 `Asia/Shanghai`。首次模块运行按 `window_end - 24h` 起步；模块运行后添加的账号从其 `created_at` 起步；每个 `platform + account + content_type` 保留独立 `last_success_end`。事件可先写入数据库，但只有主 Markdown 和 QQ Markdown 都落盘后才推进检查点；来源失败只记录 `last_error`，下一次继续从原起点补查。
+
+## 8. 实际验证结果
+
+- `python -m unittest discover -s tests -q`：102 个测试通过。
+- `python -m compileall -q daily_intelligence tests`：通过。
+- `python -m daily_intelligence --version` 与 `--help`：通过，帮助中出现 `creator` 命令。
+- CLI 创作者添加/列表、日报整合、Bilibili/YouTube Fixture、失败恢复和报告渲染均有独立测试。
+
+以上均为本地静态、单元或隔离目录证据，不等同于真实平台接口、Hermes Cron 或 QQ 消息投递成功。
+
+## 9. 手动配置与验收
+
+1. 在项目 `.env` 配置 `CREATOR_ADMIN_KEYS`，如需省略参数再配置 `CREATOR_OWNER_KEY`；Bilibili 动态接口被风控时再配置本地 `BILIBILI_COOKIE`。
+2. 通过 Hermes 当前真实入站上下文传入稳定 owner，使用自然语言添加主页链接；先用 `creator list` 检查账号状态，再触发一次现有日报任务。
+3. 检查 `reports/YYYY-MM-DD.md`、`reports/YYYY-MM-DD.qq.md` 的“创作者动态追踪”、SQLite `creator_source_runs` 和 `creator_checkpoints`；失败时确认板块显示“采集失败，无法确认今日更新”。
+4. 真实平台、Cron、QQ 被动回复、QQ 主动投递和媒体上传仍按 `deployment/HERMES_INSTALL.md` 分层验收；本次没有重启 Gateway、修改 Cron 或发送真实 QQ 消息。

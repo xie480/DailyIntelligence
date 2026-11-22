@@ -80,31 +80,31 @@ Hermes Skills、Cron 与部署文档
 
 - [x] 完成现有入口、调用链、数据库、报告和 Hermes 边界审计。
 - [x] 记录增量方案、风险和验证边界。
-- [ ] 新增 SQLite v2 创作者表、时间窗口和账号管理模型。
+- [x] 新增 SQLite v2 创作者表、时间窗口和账号管理模型。
 
 ### 阶段 2：账号管理与链接解析
 
-- [ ] 解析 Bilibili UID、YouTube Channel ID 和 `@handle`。
-- [ ] 实现授权账号的添加、查看、删除、暂停、恢复和监控类型配置。
-- [ ] 添加 CLI/Skill 自然语言路由说明。
+- [x] 解析 Bilibili UID、YouTube Channel ID 和 `@handle`。
+- [x] 实现授权账号的添加、查看、删除、暂停、恢复和监控类型配置。
+- [x] 添加 CLI/Skill 自然语言路由说明。
 
 ### 阶段 3：平台采集
 
-- [ ] 实现 Bilibili 投稿分页、动态游标、卡片分类和 BV/Dynamic ID 去重。
-- [ ] 实现 YouTube Atom Feed、频道页面解析和 Video ID 去重。
-- [ ] 完成有限重试、失败隔离和不推进检查点。
+- [x] 实现 Bilibili 投稿分页、动态游标、卡片分类和 BV/Dynamic ID 去重。
+- [x] 实现 YouTube Atom Feed、频道页面解析和 Video ID 去重。
+- [x] 完成有限重试、失败隔离和不推进检查点。
 
 ### 阶段 4：日报整合与可靠性
 
-- [ ] 在现有日报增加创作者动态章节和来源状态。
-- [ ] 报告成功后推进检查点，失败时保留窗口并支持重试。
-- [ ] 更新 README、部署说明和 CHANGELOG。
+- [x] 在现有日报增加创作者动态章节和来源状态。
+- [x] 报告成功后推进检查点，失败时保留窗口并支持重试。
+- [x] 更新 README、部署说明和 CHANGELOG。
 
 ### 阶段 5：测试与收口
 
-- [ ] 新增时间窗口、链接解析、采集 Fixture、持久化和报告集成测试。
-- [ ] 运行全量 unittest、compileall、CLI dry-run 和隔离目录 smoke。
-- [ ] 检查分阶段 Git 提交、敏感信息和未验证边界。
+- [x] 新增时间窗口、链接解析、采集 Fixture、持久化和报告集成测试。
+- [x] 运行全量 unittest、compileall、CLI dry-run 和隔离目录 smoke。
+- [x] 检查分阶段 Git 提交、敏感信息和未验证边界。
 
 ## 阶段性提交约定
 
