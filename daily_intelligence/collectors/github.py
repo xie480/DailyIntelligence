@@ -3,21 +3,191 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
+from collections import OrderedDict
+from copy import deepcopy
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
+from math import isfinite
 from typing import Any, Callable, Iterable
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import parse_qsl, quote, unquote, urlsplit
+from urllib.request import (
+    HTTPRedirectHandler,
+    Request,
+    build_opener,
+)
 
 from ..deduplication import deduplicate_items
 from ..models import Item
 
 
 GITHUB_API_URL = "https://api.github.com"
-DEFAULT_USER_AGENT = "Daily-Intelligence/1.0"
+GITHUB_API_HOST = "api.github.com"
+DEFAULT_USER_AGENT = "DailyIntelligence"
 DEFAULT_API_VERSION = "2022-11-28"
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_MAX_WAIT_SECONDS = 30.0
+DEFAULT_ETAG_CACHE_SIZE = 128
+MAX_RETRIES_HARD_LIMIT = 5
+
+
+def _redact_text(
+    value: object,
+    token: str | None,
+) -> str:
+    """将异常文本中的当前 Token 替换为固定占位符。"""
+    text = str(value)
+    if token:
+        for secret in {
+            token,
+            quote(
+                token,
+                safe="",
+            ),
+        }:
+            text = text.replace(
+                secret,
+                "[REDACTED]",
+            )
+    return text
+
+
+class GitHubAPIError(HTTPError):
+    """表示已清理敏感信息的 GitHub API 错误。"""
+
+    def __init__(
+        self,
+        code: int,
+        message: str,
+        token: str | None = None,
+    ) -> None:
+        """创建不包含请求 URL 和 Token 的 HTTP 异常。"""
+        super().__init__(
+            GITHUB_API_URL,
+            code,
+            _redact_text(
+                message,
+                token,
+            ),
+            None,
+            None,
+        )
+
+
+class GitHubNetworkError(URLError):
+    """表示已清理敏感信息的 GitHub 网络错误。"""
+
+    def __init__(
+        self,
+        error_type: str,
+        token: str | None = None,
+    ) -> None:
+        """创建只记录错误类型的网络异常。"""
+        super().__init__(
+            _redact_text(
+                f"GitHub API network error: {error_type}",
+                token,
+            )
+        )
+
+
+class _RejectRedirectHandler(HTTPRedirectHandler):
+    """拒绝所有重定向，避免 Authorization 被带到其他主机。"""
+
+    def redirect_request(
+        self,
+        req: Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> Request:
+        """在重定向请求创建前直接终止流程。"""
+        raise GitHubAPIError(
+            code,
+            "GitHub API redirect rejected",
+        )
+
+
+_SAFE_OPENER = build_opener(
+    _RejectRedirectHandler()
+)
+
+
+def _safe_urlopen(
+    request: Request,
+    timeout: int,
+) -> Any:
+    """使用禁止重定向的标准库 opener 发起请求。"""
+    return _SAFE_OPENER.open(
+        request,
+        timeout=timeout,
+    )
+
+
+def _header_value(
+    headers: Any,
+    name: str,
+) -> str | None:
+    """大小写不敏感地读取响应头。"""
+    if headers is None:
+        return None
+    try:
+        value = headers.get(name)
+    except AttributeError:
+        value = None
+    if value is not None:
+        return str(value)
+    try:
+        for key, candidate in headers.items():
+            if str(key).lower() == name.lower():
+                return str(candidate)
+    except AttributeError:
+        return None
+    return None
+
+
+def _response_status(
+    response: Any,
+) -> int | None:
+    """读取 urllib 响应的状态码。"""
+    status = getattr(
+        response,
+        "status",
+        None,
+    )
+    if status is None:
+        getcode = getattr(
+            response,
+            "getcode",
+            None,
+        )
+        if callable(getcode):
+            status = getcode()
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _response_url(
+    response: Any,
+) -> str | None:
+    """读取响应最终 URL，缺失时返回空值。"""
+    geturl = getattr(
+        response,
+        "geturl",
+        None,
+    )
+    if not callable(geturl):
+        return None
+    value = geturl()
+    return str(value) if value else None
 
 
 class _TrendingParser(HTMLParser):
@@ -94,73 +264,343 @@ class _TrendingParser(HTMLParser):
 
 
 class GitHubClient:
-    """封装 GitHub API 请求、鉴权和有限重试。"""
+    """封装 GitHub API 请求、鉴权、限流重试和进程内缓存。"""
 
     def __init__(
         self,
         token: str | None = None,
         timeout: int = 15,
-        retries: int = 2,
+        retries: int = DEFAULT_MAX_RETRIES,
         opener: Callable[..., Any] | None = None,
         sleep_fn: Callable[[float], None] | None = None,
+        max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
+        time_fn: Callable[[], float] | None = None,
+        etag_cache_size: int = DEFAULT_ETAG_CACHE_SIZE,
     ) -> None:
         """初始化可注入网络客户端，便于离线测试。"""
-        self.token = token
+        runtime_token = (
+            os.environ.get("GITHUB_TOKEN")
+            if token is None
+            else token
+        )
+        self.token = (
+            runtime_token.strip()
+            if isinstance(runtime_token, str)
+            and runtime_token.strip()
+            else None
+        )
         self.timeout = timeout
-        self.retries = max(0, retries)
-        self.opener = opener or urlopen
+        self.max_retries = min(
+            MAX_RETRIES_HARD_LIMIT,
+            max(0, int(retries)),
+        )
+        self.retries = self.max_retries
+        self.max_wait_seconds = float(max_wait_seconds)
+        if (
+            not isfinite(self.max_wait_seconds)
+            or self.max_wait_seconds < 0
+        ):
+            raise ValueError(
+                "max_wait_seconds 必须为有限非负数"
+            )
+        self.opener = opener or _safe_urlopen
         self.sleep_fn = sleep_fn or time.sleep
+        self.time_fn = time_fn or time.time
+        self.etag_cache_size = max(
+            1,
+            int(etag_cache_size),
+        )
+        self._etag_cache: OrderedDict[
+            str,
+            tuple[str | None, dict[str, Any]],
+        ] = OrderedDict()
 
     def get_json(
         self,
         path: str,
     ) -> dict[str, Any]:
         """请求一个 GitHub API 路径并解析 JSON 对象。"""
-        request_url = (
-            path
-            if path.startswith("http")
-            else f"{GITHUB_API_URL}{path}"
-        )
+        request_url = self._build_api_url(path)
+        cached_entry = self._etag_cache.get(request_url)
         headers = {
             "Accept": "application/vnd.github+json",
-            "User-Agent": DEFAULT_USER_AGENT,
             "X-GitHub-Api-Version": DEFAULT_API_VERSION,
+            "User-Agent": DEFAULT_USER_AGENT,
         }
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-        request = Request(
-            request_url,
-            headers=headers,
-            method="GET",
-        )
+        if cached_entry and cached_entry[0]:
+            headers["If-None-Match"] = cached_entry[0]
+
         for attempt in range(self.retries + 1):
+            request = Request(
+                request_url,
+                headers=headers,
+                method="GET",
+            )
             try:
-                with self.opener(
-                    request,
-                    timeout=self.timeout,
-                ) as response:
-                    payload = json.loads(
-                        response.read().decode("utf-8")
+                with self._open_request(request) as response:
+                    response_headers = getattr(
+                        response,
+                        "headers",
+                        None,
                     )
+                    status = _response_status(response)
+                    if status == 304:
+                        return self._cached_body(request_url)
+                    if status is not None and 300 <= status < 400:
+                        raise GitHubAPIError(
+                            status,
+                            "GitHub API redirect rejected",
+                            self.token,
+                        )
+                    if status is not None and status >= 400:
+                        body = response.read()
+                        error = HTTPError(
+                            request_url,
+                            status,
+                            f"GitHub API HTTP {status}",
+                            response_headers,
+                            None,
+                        )
+                        setattr(
+                            error,
+                            "_github_error_body",
+                            self._decode_error_body(body),
+                        )
+                        raise error
+                    payload_bytes = response.read()
+
+                try:
+                    payload = json.loads(
+                        payload_bytes.decode("utf-8")
+                    )
+                except (
+                    UnicodeDecodeError,
+                    json.JSONDecodeError,
+                ):
+                    raise ValueError(
+                        "GitHub API 返回无效 JSON"
+                    ) from None
                 if not isinstance(payload, dict):
-                    raise ValueError("GitHub API 返回值不是 JSON 对象")
-                return payload
+                    raise ValueError(
+                        "GitHub API 返回值不是 JSON 对象"
+                    )
+                self._store_etag(
+                    request_url,
+                    payload,
+                    response_headers,
+                )
+                return deepcopy(payload)
+            except GitHubAPIError:
+                raise
             except HTTPError as error:
-                if not self._should_retry(error, attempt):
-                    raise
-                self.sleep_fn(self._retry_after(error))
-            except (URLError, TimeoutError):
+                if error.code == 304:
+                    self._close_http_error(error)
+                    return self._cached_body(request_url)
+                if (
+                    error.code in {
+                        403,
+                        429,
+                    }
+                    and self._is_secondary_rate_limit(error)
+                ):
+                    self._close_http_error(error)
+                    raise GitHubAPIError(
+                        error.code,
+                        "GitHub API secondary rate limit; retries stopped",
+                        self.token,
+                    ) from None
+                if not self._should_retry(
+                    error,
+                    attempt,
+                ):
+                    sanitized_error = self._sanitize_http_error(error)
+                    self._close_http_error(error)
+                    raise sanitized_error from None
+                wait_seconds, reset_at = self._retry_wait(error, attempt)
+                self._close_http_error(error)
+                if wait_seconds > self.max_wait_seconds:
+                    raise GitHubAPIError(
+                        error.code,
+                        "GitHub API rate limit wait exceeds cap: "
+                        f"reset_at={reset_at or 'unknown'} "
+                        f"wait_seconds={self._format_seconds(wait_seconds)} "
+                        "max_wait_seconds="
+                        f"{self._format_seconds(self.max_wait_seconds)}",
+                        self.token,
+                    ) from None
+                self.sleep_fn(wait_seconds)
+            except (
+                URLError,
+                TimeoutError,
+                ConnectionError,
+            ) as error:
                 if attempt >= self.retries:
-                    raise
-                self.sleep_fn(float(2 ** attempt))
+                    raise GitHubNetworkError(
+                        type(error).__name__,
+                        self.token,
+                    ) from None
+                wait_seconds = float(
+                    2 ** attempt
+                )
+                if wait_seconds > self.max_wait_seconds:
+                    raise GitHubNetworkError(
+                        "retry wait exceeds cap",
+                        self.token,
+                    ) from None
+                self.sleep_fn(wait_seconds)
         raise RuntimeError("GitHub API 重试流程异常结束")
+
+    def _build_api_url(
+        self,
+        path: str,
+    ) -> str:
+        """只允许 HTTPS api.github.com，并拒绝凭据查询参数。"""
+        candidate = str(path)
+        if candidate.startswith("//"):
+            raise ValueError(
+                "GitHub API URL 必须使用 https://api.github.com"
+            )
+        try:
+            parsed_input = urlsplit(candidate)
+            if not parsed_input.scheme and not parsed_input.netloc:
+                suffix = (
+                    candidate
+                    if candidate.startswith("/")
+                    else f"/{candidate}"
+                )
+                candidate = f"{GITHUB_API_URL}{suffix}"
+            parsed = urlsplit(candidate)
+            hostname = (parsed.hostname or "").lower()
+            port = parsed.port
+        except ValueError:
+            raise ValueError(
+                "GitHub API URL 必须使用 https://api.github.com"
+            ) from None
+        if (
+            parsed.scheme.lower() != "https"
+            or hostname != GITHUB_API_HOST
+            or port is not None
+            or parsed.username
+            or parsed.password
+        ):
+            raise ValueError(
+                "GitHub API URL 必须使用 https://api.github.com"
+            )
+        query_keys = {
+            key.lower()
+            for key, _ in self._query_pairs(parsed.query)
+        }
+        if query_keys.intersection(
+            {
+                "token",
+                "access_token",
+                "authorization",
+            }
+        ):
+            raise ValueError(
+                "GitHub API URL 不得包含凭据查询参数"
+            )
+        if self.token and (
+            self.token in candidate
+            or self.token in unquote(candidate)
+        ):
+            raise ValueError(
+                "GitHub API URL 不得包含凭据"
+            )
+        return candidate
+
+    @staticmethod
+    def _query_pairs(
+        query: str,
+    ) -> list[tuple[str, str]]:
+        """解析查询键名而不记录查询值。"""
+        return parse_qsl(
+            query,
+            keep_blank_values=True,
+        )
+
+    def _open_request(
+        self,
+        request: Request,
+    ) -> Any:
+        """打开请求并拒绝非 GitHub API 的最终响应地址。"""
+        response = self.opener(
+            request,
+            timeout=self.timeout,
+        )
+        try:
+            self._validate_response_url(response)
+        except Exception:
+            close = getattr(
+                response,
+                "close",
+                None,
+            )
+            if callable(close):
+                close()
+            raise
+        return response
+
+    def _validate_response_url(
+        self,
+        response: Any,
+    ) -> None:
+        """校验响应最终 URL，防止注入的 opener 绕过主机限制。"""
+        response_url = _response_url(response)
+        if response_url is None:
+            return
+        try:
+            self._build_api_url(response_url)
+        except ValueError:
+            raise GitHubAPIError(
+                310,
+                "GitHub API redirect target rejected",
+                self.token,
+            ) from None
+
+    def _cached_body(
+        self,
+        request_url: str,
+    ) -> dict[str, Any]:
+        """返回 304 对应的内存缓存，缺失时抛出清理后的错误。"""
+        cached_entry = self._etag_cache.get(request_url)
+        if cached_entry is None:
+            raise GitHubAPIError(
+                304,
+                "GitHub API returned 304 without a cached body",
+                self.token,
+            )
+        self._etag_cache.move_to_end(request_url)
+        return deepcopy(cached_entry[1])
+
+    def _store_etag(
+        self,
+        request_url: str,
+        payload: dict[str, Any],
+        headers: Any,
+    ) -> None:
+        """在固定容量的进程内缓存中保存响应体和 ETag。"""
+        self._etag_cache[request_url] = (
+            _header_value(
+                headers,
+                "ETag",
+            ),
+            deepcopy(payload),
+        )
+        self._etag_cache.move_to_end(request_url)
+        while len(self._etag_cache) > self.etag_cache_size:
+            self._etag_cache.popitem(
+                last=False
+            )
 
     def _should_retry(
         self,
         error: HTTPError,
         attempt: int,
     ) -> bool:
-        """判断限流或服务端错误是否允许重试。"""
+        """判断限流或暂时性服务端错误是否允许重试。"""
         return (
             attempt < self.retries
             and error.code in {
@@ -173,16 +613,201 @@ class GitHubClient:
             }
         )
 
-    @staticmethod
-    def _retry_after(
+    def _retry_wait(
+        self,
         error: HTTPError,
-    ) -> float:
-        """读取 Retry-After，缺省时使用短退避。"""
-        header = error.headers.get("Retry-After") if error.headers else None
+        attempt: int,
+    ) -> tuple[float, str | None]:
+        """按 Retry-After、HTTP-date、Reset 或退避计算等待时间。"""
+        retry_after = _header_value(
+            error.headers,
+            "Retry-After",
+        )
+        now = float(
+            self.time_fn()
+        )
+        if not isfinite(now):
+            now = time.time()
+        if retry_after:
+            try:
+                numeric = float(retry_after)
+                if isfinite(numeric):
+                    wait_seconds = max(
+                        0.0,
+                        numeric,
+                    )
+                    return (
+                        wait_seconds,
+                        self._format_reset_at(
+                            now + wait_seconds
+                        ),
+                    )
+            except (TypeError, ValueError):
+                pass
+            try:
+                retry_at = parsedate_to_datetime(retry_after)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(
+                        tzinfo=timezone.utc
+                    )
+                wait_seconds = max(
+                    0.0,
+                    retry_at.timestamp() - now,
+                )
+                return (
+                    wait_seconds,
+                    retry_at.isoformat(),
+                )
+            except (
+                TypeError,
+                ValueError,
+                OverflowError,
+            ):
+                pass
+
+        reset_header = _header_value(
+            error.headers,
+            "X-RateLimit-Reset",
+        )
+        if reset_header:
+            try:
+                reset_epoch = float(reset_header)
+                if isfinite(reset_epoch):
+                    return (
+                        max(
+                            0.0,
+                            reset_epoch - now,
+                        ),
+                        self._format_reset_at(reset_epoch),
+                    )
+            except (
+                TypeError,
+                ValueError,
+                OverflowError,
+            ):
+                pass
+
+        wait_seconds = float(
+            2 ** attempt
+        )
+        return (
+            wait_seconds,
+            None,
+        )
+
+    def _is_secondary_rate_limit(
+        self,
+        error: HTTPError,
+    ) -> bool:
+        """识别 GitHub secondary rate limit 或 abuse 信号。"""
+        signals = " ".join(
+            (
+                str(error.reason or ""),
+                self._read_error_body(error),
+            )
+        ).lower()
+        return any(
+            marker in signals
+            for marker in (
+                "secondary rate limit",
+                "abuse detection",
+                "abuse rate limit",
+            )
+        )
+
+    @staticmethod
+    def _decode_error_body(
+        body: bytes | str | None,
+    ) -> str:
+        """读取错误体用于分类，但不把它放入对外错误消息。"""
+        if body is None:
+            return ""
+        if isinstance(body, bytes):
+            return body.decode(
+                "utf-8",
+                errors="replace",
+            )
+        return str(body)
+
+    def _read_error_body(
+        self,
+        error: HTTPError,
+    ) -> str:
+        """读取并缓存错误体，仅用于判断 secondary 限流。"""
+        cached = getattr(
+            error,
+            "_github_error_body",
+            None,
+        )
+        if cached is not None:
+            return str(cached)
         try:
-            return max(0.0, float(header))
-        except (TypeError, ValueError):
-            return 1.0
+            body = error.read()
+        except (
+            AttributeError,
+            OSError,
+            ValueError,
+        ):
+            body = b""
+        decoded = self._decode_error_body(body)
+        setattr(
+            error,
+            "_github_error_body",
+            decoded,
+        )
+        return decoded
+
+    @staticmethod
+    def _close_http_error(
+        error: HTTPError,
+    ) -> None:
+        """关闭标准库错误体，避免响应句柄和敏感内容继续存活。"""
+        close = getattr(
+            error,
+            "close",
+            None,
+        )
+        if callable(close):
+            close()
+
+    def _sanitize_http_error(
+        self,
+        error: HTTPError,
+    ) -> GitHubAPIError:
+        """把标准库 HTTPError 转为不泄露细节的异常。"""
+        return GitHubAPIError(
+            error.code,
+            f"GitHub API returned HTTP {error.code}",
+            self.token,
+        )
+
+    @staticmethod
+    def _format_seconds(
+        value: float,
+    ) -> str:
+        """以稳定短格式输出等待秒数。"""
+        if value.is_integer():
+            return str(
+                int(value)
+            )
+        return f"{value:.3f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def _format_reset_at(
+        epoch: float,
+    ) -> str:
+        """把 Unix 时间转换为 UTC 文本，异常时保留数值。"""
+        try:
+            return datetime.fromtimestamp(
+                epoch,
+                tz=timezone.utc,
+            ).isoformat()
+        except (
+            OverflowError,
+            OSError,
+            ValueError,
+        ):
+            return str(epoch)
 
 
 class GitHubCollector:
@@ -212,6 +837,10 @@ class GitHubCollector:
             ]
         )
         collected: list[Item] = []
+        release_cache: dict[
+            str,
+            dict[str, Any] | None,
+        ] = {}
         for query_config in query_list:
             query_name = str(
                 query_config.get("name")
@@ -230,6 +859,7 @@ class GitHubCollector:
                     query_name,
                     query_config.get("section"),
                     include_releases,
+                    release_cache,
                 )
                 if item:
                     collected.append(item)
@@ -295,6 +925,10 @@ class GitHubCollector:
         query_name: str,
         section: str | None,
         include_releases: bool,
+        release_cache: dict[
+            str,
+            dict[str, Any] | None,
+        ] | None = None,
     ) -> Item | None:
         """把 GitHub 仓库 JSON 转成统一项目模型。"""
         full_name = str(repository.get("full_name") or "").strip()
@@ -303,20 +937,29 @@ class GitHubCollector:
             return None
         latest_release: dict[str, Any] | None = None
         if include_releases:
-            try:
-                release = self.client.get_json(
-                    f"/repos/{full_name}/releases/latest"
-                )
-                if release.get("tag_name"):
-                    latest_release = {
-                        "tag": release.get("tag_name"),
-                        "name": release.get("name") or release.get("tag_name"),
-                        "url": release.get("html_url"),
-                        "published_at": release.get("published_at"),
-                    }
-            except HTTPError as error:
-                if error.code != 404:
-                    raise
+            release_key = full_name.casefold()
+            if (
+                release_cache is not None
+                and release_key in release_cache
+            ):
+                latest_release = release_cache[release_key]
+            else:
+                try:
+                    release = self.client.get_json(
+                        f"/repos/{full_name}/releases/latest"
+                    )
+                    if release.get("tag_name"):
+                        latest_release = {
+                            "tag": release.get("tag_name"),
+                            "name": release.get("name") or release.get("tag_name"),
+                            "url": release.get("html_url"),
+                            "published_at": release.get("published_at"),
+                        }
+                except HTTPError as error:
+                    if error.code != 404:
+                        raise
+                if release_cache is not None:
+                    release_cache[release_key] = latest_release
         license_info = repository.get("license") or {}
         metadata: dict[str, Any] = {
             "query_name": query_name,

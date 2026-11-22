@@ -91,6 +91,10 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" --tim
 
 GitHub Token 是可选的。设置 GITHUB_TOKEN 可以提高 API 配额，不设置时仍使用公开 API。Token 不写入源码、JSON 模板或日报。
 
+GitHub API 的 Token 只在进程运行时从 `GITHUB_TOKEN` 读取。请求固定使用 `https://api.github.com`、`Accept: application/vnd.github+json`、`X-GitHub-Api-Version: 2022-11-28` 和 `User-Agent: DailyIntelligence`；Token 只放在 `Authorization: Bearer ...` 请求头中。客户端拒绝非 HTTPS、非 `api.github.com` 地址和重定向，并把错误中的 Token 清理后再交给 CLI。
+
+限流和暂时性网络错误最多重试 2 次，单次等待上限为 30 秒；数值或 HTTP-date `Retry-After`、`X-RateLimit-Reset` 会被尊重，超过上限时立即返回脱敏错误。ETag 和响应体只保存在当前 `GitHubClient` 实例的有限内存缓存中，不写入运行数据目录。
+
 ## 测试
 
 项目没有第三方运行时依赖，使用 Python unittest：
