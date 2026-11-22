@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import logging
+import os
 from pathlib import Path
+import re
+from types import MappingProxyType
+from typing import Mapping
 from zoneinfo import ZoneInfo
 
 
@@ -19,6 +23,205 @@ LOG_FILE_NAME = "daily-intelligence.log"
 DATABASE_FILE_NAME = "intelligence.db"
 PROFILE_FILE_NAME = "user_profile.json"
 SOURCES_FILE_NAME = "sources.json"
+PROJECT_ENV_FILE_NAME = ".env"
+GITHUB_TOKEN_NAME = "GITHUB_TOKEN"
+_ENV_KEY_PATTERN = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*$"
+)
+
+
+class DotEnvError(ValueError):
+    """表示项目 `.env` 文件无法安全解析或读取。"""
+
+    def __init__(
+        self,
+        path: Path,
+        line_number: int,
+        reason: str,
+    ) -> None:
+        """创建只包含文件名和解析位置的安全错误。"""
+        self.path = path
+        self.line_number = line_number
+        super().__init__(
+            f"项目环境文件 {path.name} 第 {line_number} 行：{reason}"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectSettings:
+    """保存项目环境变量及其来源路径，不在表示文本中展开变量值。"""
+
+    project_root: Path
+    env_path: Path
+    variables: Mapping[str, str] = field(
+        repr=False,
+    )
+
+    @property
+    def github_token(self) -> str | None:
+        """返回去除首尾空格的 GitHub Token，空值表示匿名访问。"""
+        value = self.variables.get(
+            GITHUB_TOKEN_NAME
+        )
+        if not isinstance(value, str):
+            return None
+        token = value.strip()
+        return token or None
+
+
+def resolve_project_root(
+    project_root: Path | str | None = None,
+) -> Path:
+    """基于配置模块位置解析项目根目录，不依赖当前工作目录。"""
+    if project_root is not None:
+        return Path(
+            project_root
+        ).expanduser().resolve()
+    return Path(__file__).resolve().parent.parent
+
+
+def _parse_env_value(
+    raw_value: str,
+    path: Path,
+    line_number: int,
+) -> str:
+    """解析一个环境变量值并拒绝未闭合或多余的引号内容。"""
+    value = raw_value.strip()
+    if not value:
+        return ""
+    if value[0] in {
+        "'",
+        '"',
+    }:
+        quote_char = value[0]
+        closing_index = None
+        for index in range(
+            1,
+            len(value),
+        ):
+            if (
+                value[index] == quote_char
+                and value[index - 1] != "\\"
+            ):
+                closing_index = index
+                break
+        if closing_index is None:
+            raise DotEnvError(
+                path,
+                line_number,
+                "引号未闭合",
+            )
+        trailing = value[
+            closing_index + 1:
+        ].strip()
+        if trailing and not trailing.startswith("#"):
+            raise DotEnvError(
+                path,
+                line_number,
+                "引号后存在无法解析的内容",
+            )
+        return value[
+            1:closing_index
+        ]
+    comment_index = re.search(
+        r"\s+#",
+        value,
+    )
+    if comment_index:
+        return value[
+            :comment_index.start()
+        ].rstrip()
+    return value
+
+
+def parse_env_file(
+    path: Path | str,
+) -> dict[str, str]:
+    """使用标准库解析项目 `.env` 文件，缺失文件返回空字典。"""
+    env_path = Path(path).expanduser()
+    if not env_path.is_file():
+        return {}
+    try:
+        with env_path.open(
+            "r",
+            encoding="utf-8-sig",
+            newline=None,
+        ) as handle:
+            lines = handle.read().splitlines()
+    except UnicodeError:
+        raise DotEnvError(
+            env_path,
+            0,
+            "文件不是有效 UTF-8",
+        ) from None
+    except OSError:
+        raise DotEnvError(
+            env_path,
+            0,
+            "文件无法读取",
+        ) from None
+
+    values: dict[str, str] = {}
+    for line_number, line in enumerate(
+        lines,
+        start=1,
+    ):
+        content = line.strip()
+        if not content or content.startswith("#"):
+            continue
+        if content.startswith("export "):
+            content = content[
+                len("export "):
+            ].lstrip()
+        if "=" not in content:
+            raise DotEnvError(
+                env_path,
+                line_number,
+                "缺少 '='",
+            )
+        raw_key, raw_value = content.split(
+            "=",
+            1,
+        )
+        key = raw_key.strip()
+        if not _ENV_KEY_PATTERN.fullmatch(key):
+            raise DotEnvError(
+                env_path,
+                line_number,
+                "变量名格式无效",
+            )
+        values[key] = _parse_env_value(
+            raw_value,
+            env_path,
+            line_number,
+        )
+    return values
+
+
+def load_project_settings(
+    project_root: Path | str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> ProjectSettings:
+    """合并项目 `.env` 与当前进程环境，进程变量优先。"""
+    root = resolve_project_root(
+        project_root,
+    )
+    env_path = root / PROJECT_ENV_FILE_NAME
+    values = parse_env_file(env_path)
+    process_environment = (
+        os.environ
+        if environ is None
+        else environ
+    )
+    merged = dict(values)
+    for key, value in process_environment.items():
+        if isinstance(key, str) and isinstance(value, str):
+            merged[key] = value
+    return ProjectSettings(
+        project_root=root,
+        env_path=env_path,
+        variables=MappingProxyType(merged),
+    )
 
 
 @dataclass(frozen=True, slots=True)
