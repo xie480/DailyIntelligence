@@ -11,10 +11,11 @@
 - 独立的 `dailyintelligence-creators` Hermes Skill 源文件、命令引用和自然语言目标确认规则。
 - 没有预置授权时首次私聊 sender 自动原子登记为首个 creator owner；`CREATOR_ADMIN_KEYS` 与 `CREATOR_OWNER_KEY` 保留为可选兼容配置。
 - 日报“创作者动态追踪”章节、QQ Markdown 同步渲染、失败状态和报告成功后检查点推进。
+- Bilibili 独立风控处理层，识别 `-352`、`-412` 和 HTTP `412`，执行接口级冷却、请求间隔与 WBI 缓存刷新。
 
 ### Verification boundary
 
-- 创作者 URL、时间窗口、分页/Feed Fixture、失败隔离、幂等事件、CLI 和日报整合使用本地 unittest 验证。
+- 创作者 URL、时间窗口、分页/Feed Fixture、失败隔离、幂等事件、Bilibili 风控处理层、CLI 和日报整合使用本地 unittest 验证。
 - 真实 Bilibili 接口、Cookie 风控、YouTube 频道页、Hermes Cron、QQ 入站和实际消息投递仍需目标环境单独验收。
 
 ## [第三轮升级] - 2026-11-22

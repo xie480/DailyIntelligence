@@ -26,6 +26,7 @@ DailyIntelligence/
 │   ├── collectors/
 │   │   ├── github.py
 │   │   ├── rss.py
+│   │   ├── bilibili_risk.py
 │   │   └── creators.py
 │   ├── creator_service.py
 │   ├── creator_urls.py
@@ -131,6 +132,8 @@ GitHub Token 是可选的。项目根目录的 `.env` 用作本项目独立的�
 GitHub 专用代理使用 `GITHUB_PROXY` 配置，优先级为进程级 `GITHUB_PROXY`、项目 `.env` 中的 `GITHUB_PROXY`、Python 自动代理发现。显式代理会同时用于 GitHub API 的 HTTP/HTTPS 请求，并覆盖 `HTTP_PROXY`、`HTTPS_PROXY` 和 `ALL_PROXY`；显式配置无效或与 `NO_PROXY` 冲突时直接报错，不会静默直连。`.env.example` 使用 `http://127.0.0.1:7890` 作为示例地址，需按本机代理客户端实际监听地址调整。
 
 创作者管理默认不需要配置授权环境变量：首次私聊的真实 sender ID 会写入 SQLite 授权表并成为首个 owner。`CREATOR_ADMIN_KEYS` 是可选的预置/多管理员白名单，多个值用逗号或分号分隔；`CREATOR_OWNER_KEY` 仅用于本地 CLI 省略参数，Hermes 应优先传入当前私聊 sender ID。Bilibili 动态接口需要 Cookie 时在本机 `.env` 设置 `BILIBILI_COOKIE`，该值只在内存中用于请求，不写入 SQLite、日志、日报或 Git。
+
+Bilibili 客户端包含独立的风控处理层：识别业务码 `-352`、`-412` 和 HTTP `412`，对相邻请求保持 1 秒最小间隔，触发风控后默认冷却 15 分钟并按接口指数延长，冷却期内不会再次请求。视频接口的 `-352` 会清理 WBI 缓存，冷却结束后的下一次请求重新读取 WBI key。风控状态只存在当前 Python 进程，真实平台 Cookie、网络和接口可用性仍需在目标环境验证。
 
 配置模块根据源码位置解析项目根目录，不依赖当前工作目录、Hermes Gateway 环境继承或 GitHub CLI。GitHub API 的 Token 只在进程运行时由统一配置模块读取，请求固定使用 `https://api.github.com`、`Accept: application/vnd.github+json`、`X-GitHub-Api-Version: 2022-11-28` 和 `User-Agent: DailyIntelligence`；Token 只放在 `Authorization: Bearer ...` 请求头中，不进入 URL、数据库或缓存。客户端拒绝非 HTTPS、非 `api.github.com` 地址和重定向，并把错误中的 Token 清理后再交给 CLI。401 会提示 Token 无效或已过期，403/429 按限流响应头和有限指数退避处理。
 

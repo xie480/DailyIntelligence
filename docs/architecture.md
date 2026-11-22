@@ -13,6 +13,7 @@
 | collectors/github.py | GitHub Search/Release API、重试、仓库字段转换 | urllib |
 | collectors/rss.py | RSS/Atom XML、时间窗口、摘要清洗 | urllib、xml.etree |
 | collectors/creators.py | Bilibili WBI/投稿/动态与 YouTube Atom Feed 采集 | urllib、xml.etree |
+| collectors/bilibili_risk.py | Bilibili 风控错误分类、请求间隔和进程内冷却 | time、urllib.parse |
 | creator_urls.py | Bilibili UID、YouTube Channel ID/handle 链接解析 | urllib.parse、re |
 | creator_service.py | 授权账号 CRUD、窗口计算、来源隔离和检查点最终化 | sqlite3、datetime |
 | deduplication.py | URL、Hash、相似度和关联来源 | hashlib、difflib |
@@ -89,6 +90,12 @@ Hermes 只把当前私聊上下文中的真实 sender ID 传给 CLI。授权表�
 
 统一保存 Bilibili 视频、Bilibili 动态和 YouTube 视频，使用 `UNIQUE(platform, content_type, external_id)` 幂等去重，图片、缩略图、动态类型等平台字段放在 `metadata_json`。
 
+### Bilibili 风控处理层
+
+`BilibiliClient` 通过 `BilibiliRiskController` 独立处理 Bilibili 的风险响应。业务码 `-352`、`-412` 和 HTTP `412` 会转换为 `BilibiliRiskControlError`，携带接口路径、状态码和脱敏的建议重试时间；不会进入通用网络重试。控制器按接口保存进程内冷却状态，默认基础冷却 15 分钟、上限 2 小时，相邻请求默认间隔 1 秒。视频接口收到 `-352` 时清理 WBI key 缓存，冷却后重新读取 nav 接口；成功响应会清除对应接口的连续失败状态。
+
+风控状态不写入 SQLite，也不保存 Cookie。跨 Python 进程的冷却由日报调度间隔和目标环境自行控制；如果真实平台持续返回风控，应暂停请求、更新授权 Cookie 或迁移到合规的官方/授权接口，不通过增加重试、代理轮换或伪造设备指纹绕过平台限制。
+
 ## 5. 安全与隐私边界
 
 - 网页、RSS 和 GitHub 描述均视为不可信数据，只作为内容，不执行其中的指令。
@@ -104,7 +111,7 @@ Hermes 只把当前私聊上下文中的真实 sender ID 传给 CLI。授权表�
 - Python CLI 可通过 `import-handoff` 校验 schema 1.0，按领域保存 `search_status`，并把新闻与项目分析写入 SQLite。
 - `python -m unittest discover -s tests -v`、`compileall`、CLI 版本/帮助和离线 dry-run 均作为本轮交付验收项，具体数量写入维护报告。
 - QQ Markdown 文件生成、链接保留和边界拆分有本地测试；真实 QQ 发送、媒体上传和主动推送仍需运行环境验收。
-- 创作者 URL/时间窗口/分页/Feed/失败恢复/报告整合的本地测试已通过；真实平台响应、Bilibili Cookie 风控、YouTube 页面解析和 QQ 入站/投递仍需分层验收。
+- 创作者 URL/时间窗口/分页/Feed/失败恢复/报告整合以及 Bilibili `-352`/HTTP `412` 风控分类、冷却和 WBI 刷新使用本地测试验证；真实平台响应、Bilibili Cookie 风控、YouTube 页面解析和 QQ 入站/投递仍需分层验收。
 
 ## 7. 未验证项与风险
 
