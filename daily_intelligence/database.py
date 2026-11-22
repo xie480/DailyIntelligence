@@ -11,10 +11,10 @@ from typing import Any, Iterable, Iterator
 
 from .config import now_iso
 from .deduplication import content_fingerprint, normalize_url
-from .models import Item
+from .models import CreatorAccount, CreatorUpdate, Item
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class Database:
@@ -52,8 +52,8 @@ class Database:
                 "SELECT MAX(version) AS version FROM schema_version"
             ).fetchone()
             current_version = int(current_row["version"] or 0)
-            if current_version <= SCHEMA_VERSION:
-                self._apply_v1()
+            self._apply_v1()
+            self._apply_v2()
             if current_version < SCHEMA_VERSION:
                 self.connection.execute(
                     """
@@ -147,6 +147,102 @@ class Database:
                 error TEXT
             );
 
+            """,
+        )
+
+    def _apply_v2(self) -> None:
+        """创建创作者账号、事件、检查点和授权表，保持 v1 数据不变。"""
+        self.connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS creator_authorizations (
+                owner_key TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS creator_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform TEXT NOT NULL,
+                account_key TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                profile_url TEXT NOT NULL,
+                owner_key TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                monitor_videos INTEGER NOT NULL DEFAULT 1,
+                monitor_dynamics INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(platform, account_key),
+                FOREIGN KEY(owner_key)
+                    REFERENCES creator_authorizations(owner_key)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_creator_accounts_owner
+                ON creator_accounts(owner_key, status);
+
+            CREATE TABLE IF NOT EXISTS creator_state (
+                state_key TEXT PRIMARY KEY,
+                last_success_end TEXT,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS creator_checkpoints (
+                account_id INTEGER NOT NULL,
+                content_type TEXT NOT NULL,
+                first_window_start TEXT,
+                last_success_end TEXT,
+                last_status TEXT NOT NULL DEFAULT 'pending',
+                last_error TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(account_id, content_type),
+                FOREIGN KEY(account_id)
+                    REFERENCES creator_accounts(id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS creator_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER NOT NULL,
+                platform TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                creator_name TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL,
+                summary TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL DEFAULT '',
+                url TEXT NOT NULL,
+                published_at TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                collected_at TEXT NOT NULL,
+                collection_run_key TEXT NOT NULL,
+                UNIQUE(platform, content_type, external_id),
+                FOREIGN KEY(account_id)
+                    REFERENCES creator_accounts(id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_creator_events_window
+                ON creator_events(account_id, content_type, published_at);
+
+            CREATE TABLE IF NOT EXISTS creator_source_runs (
+                collection_run_key TEXT NOT NULL,
+                account_id INTEGER NOT NULL,
+                content_type TEXT NOT NULL,
+                window_start TEXT NOT NULL,
+                window_end TEXT NOT NULL,
+                status TEXT NOT NULL,
+                event_count INTEGER NOT NULL DEFAULT 0,
+                error TEXT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                PRIMARY KEY(collection_run_key, account_id, content_type),
+                FOREIGN KEY(account_id)
+                    REFERENCES creator_accounts(id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_creator_source_runs_status
+                ON creator_source_runs(status, finished_at);
             """,
         )
 
@@ -349,6 +445,482 @@ class Database:
             "SELECT COUNT(*) AS count FROM items"
         ).fetchone()
         return int(row["count"])
+
+    def authorize_creator_owner(
+        self,
+        owner_key: str,
+    ) -> None:
+        """登记可管理创作者账号的稳定 owner 标识。"""
+        cleaned = owner_key.strip()
+        if not cleaned:
+            raise ValueError("owner_key 不能为空")
+        with self.transaction():
+            self.connection.execute(
+                """
+                INSERT INTO creator_authorizations(owner_key, created_at)
+                VALUES (?, ?)
+                ON CONFLICT(owner_key) DO NOTHING
+                """,
+                (
+                    cleaned,
+                    now_iso(),
+                ),
+            )
+
+    def is_creator_owner_authorized(
+        self,
+        owner_key: str,
+    ) -> bool:
+        """判断 owner 是否已被授权管理创作者账号。"""
+        row = self.connection.execute(
+            """
+            SELECT 1
+            FROM creator_authorizations
+            WHERE owner_key = ?
+            """,
+            (
+                owner_key.strip(),
+            ),
+        ).fetchone()
+        return row is not None
+
+    def add_creator_account(
+        self,
+        account: CreatorAccount,
+    ) -> int:
+        """写入一个不重复的创作者账号并返回数据库 ID。"""
+        current_time = now_iso()
+        created_at = account.created_at or current_time
+        with self.transaction():
+            cursor = self.connection.execute(
+                """
+                INSERT INTO creator_accounts(
+                    platform, account_key, display_name, profile_url,
+                    owner_key, status, monitor_videos, monitor_dynamics,
+                    metadata_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    account.platform,
+                    account.account_key,
+                    account.display_name,
+                    account.profile_url,
+                    account.owner_key,
+                    account.status,
+                    int(account.monitor_videos),
+                    int(account.monitor_dynamics),
+                    json.dumps(
+                        account.metadata,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    created_at,
+                    current_time,
+                ),
+            )
+        return int(cursor.lastrowid)
+
+    def get_creator_account(
+        self,
+        platform: str,
+        account_key: str,
+    ) -> dict[str, Any] | None:
+        """按平台和唯一账号键读取一个创作者账号。"""
+        row = self.connection.execute(
+            """
+            SELECT *
+            FROM creator_accounts
+            WHERE platform = ? AND account_key = ?
+            """,
+            (
+                platform.strip().lower(),
+                account_key.strip(),
+            ),
+        ).fetchone()
+        return self._creator_account_row_to_dict(row) if row else None
+
+    def list_creator_accounts(
+        self,
+        owner_key: str | None = None,
+        include_paused: bool = True,
+    ) -> list[dict[str, Any]]:
+        """按 owner 读取创作者账号，默认保留暂停账号。"""
+        clauses: list[str] = []
+        values: list[Any] = []
+        if owner_key is not None:
+            clauses.append("owner_key = ?")
+            values.append(owner_key.strip())
+        if not include_paused:
+            clauses.append("status = 'active'")
+        where = (
+            "WHERE " + " AND ".join(clauses)
+            if clauses
+            else ""
+        )
+        rows = self.connection.execute(
+            f"""
+            SELECT *
+            FROM creator_accounts
+            {where}
+            ORDER BY platform, display_name, id
+            """,
+            tuple(values),
+        ).fetchall()
+        return [
+            self._creator_account_row_to_dict(row)
+            for row in rows
+        ]
+
+    def update_creator_account(
+        self,
+        platform: str,
+        account_key: str,
+        **updates: Any,
+    ) -> None:
+        """更新账号状态、名称或监控类型，字段名受白名单限制。"""
+        allowed = {
+            "display_name",
+            "profile_url",
+            "status",
+            "monitor_videos",
+            "monitor_dynamics",
+            "metadata_json",
+        }
+        unknown = set(updates) - allowed
+        if unknown:
+            raise ValueError(
+                "不允许更新创作者字段: "
+                + ", ".join(sorted(unknown))
+            )
+        if not updates:
+            return
+        assignments = ", ".join(
+            f"{key} = ?"
+            for key in updates
+        )
+        values = list(updates.values())
+        values.extend(
+            [
+                now_iso(),
+                platform.strip().lower(),
+                account_key.strip(),
+            ]
+        )
+        with self.transaction():
+            self.connection.execute(
+                f"""
+                UPDATE creator_accounts
+                SET {assignments}, updated_at = ?
+                WHERE platform = ? AND account_key = ?
+                """,
+                tuple(values),
+            )
+
+    def delete_creator_account(
+        self,
+        platform: str,
+        account_key: str,
+    ) -> bool:
+        """删除账号及其检查点、事件和来源运行记录。"""
+        with self.transaction():
+            cursor = self.connection.execute(
+                """
+                DELETE FROM creator_accounts
+                WHERE platform = ? AND account_key = ?
+                """,
+                (
+                    platform.strip().lower(),
+                    account_key.strip(),
+                ),
+            )
+        return cursor.rowcount > 0
+
+    def get_creator_global_last_success_end(self) -> str | None:
+        """读取最近一次成功落盘日报对应的全局创作者截止时间。"""
+        row = self.connection.execute(
+            """
+            SELECT last_success_end
+            FROM creator_state
+            WHERE state_key = 'global'
+            """
+        ).fetchone()
+        if not row:
+            return None
+        return row["last_success_end"]
+
+    def set_creator_global_success(
+        self,
+        window_end: str,
+    ) -> None:
+        """在日报已经可靠保存后推进全局创作者截止时间。"""
+        with self.transaction():
+            self.connection.execute(
+                """
+                INSERT INTO creator_state(
+                    state_key, last_success_end, updated_at
+                )
+                VALUES ('global', ?, ?)
+                ON CONFLICT(state_key) DO UPDATE SET
+                    last_success_end = excluded.last_success_end,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    window_end,
+                    now_iso(),
+                ),
+            )
+
+    def ensure_creator_checkpoint(
+        self,
+        account_id: int,
+        content_type: str,
+        first_window_start: str,
+    ) -> dict[str, Any]:
+        """创建来源检查点并保留首次窗口起点，重复调用不会覆盖进度。"""
+        with self.transaction():
+            self.connection.execute(
+                """
+                INSERT INTO creator_checkpoints(
+                    account_id, content_type, first_window_start,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(account_id, content_type) DO NOTHING
+                """,
+                (
+                    account_id,
+                    content_type,
+                    first_window_start,
+                    now_iso(),
+                ),
+            )
+        return self.get_creator_checkpoint(
+            account_id,
+            content_type,
+        ) or {}
+
+    def get_creator_checkpoint(
+        self,
+        account_id: int,
+        content_type: str,
+    ) -> dict[str, Any] | None:
+        """读取账号和内容类型独立的采集检查点。"""
+        row = self.connection.execute(
+            """
+            SELECT *
+            FROM creator_checkpoints
+            WHERE account_id = ? AND content_type = ?
+            """,
+            (
+                account_id,
+                content_type,
+            ),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def save_creator_events(
+        self,
+        account_id: int,
+        collection_run_key: str,
+        events: Iterable[CreatorUpdate],
+    ) -> int:
+        """在事务中幂等保存来源事件，返回本次处理的事件数量。"""
+        values = list(events)
+        if not values:
+            return 0
+        with self.transaction():
+            for event in values:
+                self.connection.execute(
+                    """
+                    INSERT INTO creator_events(
+                        account_id, platform, content_type, external_id,
+                        creator_name, title, summary, content, url,
+                        published_at, metadata_json, collected_at,
+                        collection_run_key
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(platform, content_type, external_id) DO UPDATE SET
+                        account_id = excluded.account_id,
+                        creator_name = excluded.creator_name,
+                        title = excluded.title,
+                        summary = excluded.summary,
+                        content = excluded.content,
+                        url = excluded.url,
+                        published_at = excluded.published_at,
+                        metadata_json = excluded.metadata_json,
+                        collected_at = excluded.collected_at,
+                        collection_run_key = excluded.collection_run_key
+                    """,
+                    (
+                        account_id,
+                        event.platform,
+                        event.content_type,
+                        event.external_id,
+                        event.creator_name,
+                        event.title,
+                        event.summary,
+                        event.content,
+                        event.url,
+                        event.published_at,
+                        json.dumps(
+                            event.metadata,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        now_iso(),
+                        collection_run_key,
+                    ),
+                )
+        return len(values)
+
+    def save_creator_source_run(
+        self,
+        collection_run_key: str,
+        account_id: int,
+        content_type: str,
+        window_start: str,
+        window_end: str,
+        status: str,
+        event_count: int = 0,
+        error: str | None = None,
+        finished: bool = True,
+    ) -> None:
+        """记录单个账号来源的成功、失败或部分采集状态。"""
+        current_time = now_iso()
+        with self.transaction():
+            self.connection.execute(
+                """
+                INSERT INTO creator_source_runs(
+                    collection_run_key, account_id, content_type,
+                    window_start, window_end, status, event_count, error,
+                    started_at, finished_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(collection_run_key, account_id, content_type)
+                DO UPDATE SET
+                    window_start = excluded.window_start,
+                    window_end = excluded.window_end,
+                    status = excluded.status,
+                    event_count = excluded.event_count,
+                    error = excluded.error,
+                    finished_at = excluded.finished_at
+                """,
+                (
+                    collection_run_key,
+                    account_id,
+                    content_type,
+                    window_start,
+                    window_end,
+                    status,
+                    event_count,
+                    error,
+                    current_time,
+                    current_time if finished else None,
+                ),
+            )
+
+    def mark_creator_checkpoint_success(
+        self,
+        account_id: int,
+        content_type: str,
+        window_end: str,
+    ) -> None:
+        """在报告落盘后推进单个来源检查点。"""
+        with self.transaction():
+            self.connection.execute(
+                """
+                UPDATE creator_checkpoints
+                SET last_success_end = ?, last_status = 'success',
+                    last_error = NULL, updated_at = ?
+                WHERE account_id = ? AND content_type = ?
+                """,
+                (
+                    window_end,
+                    now_iso(),
+                    account_id,
+                    content_type,
+                ),
+            )
+
+    def mark_creator_checkpoint_failure(
+        self,
+        account_id: int,
+        content_type: str,
+        error: str,
+    ) -> None:
+        """保存来源失败原因但不推进成功检查点。"""
+        with self.transaction():
+            self.connection.execute(
+                """
+                UPDATE creator_checkpoints
+                SET last_status = 'failed', last_error = ?, updated_at = ?
+                WHERE account_id = ? AND content_type = ?
+                """,
+                (
+                    error[:500],
+                    now_iso(),
+                    account_id,
+                    content_type,
+                ),
+            )
+
+    def list_creator_events(
+        self,
+        account_id: int,
+        content_type: str,
+        window_start: str,
+        window_end: str,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """读取指定来源时间窗口内的事件并按发布时间倒序排列。"""
+        rows = self.connection.execute(
+            """
+            SELECT *
+            FROM creator_events
+            WHERE account_id = ?
+              AND content_type = ?
+              AND published_at > ?
+              AND published_at <= ?
+            ORDER BY published_at DESC, id DESC
+            LIMIT ?
+            """,
+            (
+                account_id,
+                content_type,
+                window_start,
+                window_end,
+                limit,
+            ),
+        ).fetchall()
+        return [
+            self._creator_event_row_to_dict(row)
+            for row in rows
+        ]
+
+    @staticmethod
+    def _creator_account_row_to_dict(
+        row: sqlite3.Row,
+    ) -> dict[str, Any]:
+        """把创作者账号行转换为可供服务层使用的字典。"""
+        result = dict(row)
+        result["monitor_videos"] = bool(result["monitor_videos"])
+        result["monitor_dynamics"] = bool(result["monitor_dynamics"])
+        result["metadata"] = json.loads(
+            result.pop("metadata_json") or "{}"
+        )
+        return result
+
+    @staticmethod
+    def _creator_event_row_to_dict(
+        row: sqlite3.Row,
+    ) -> dict[str, Any]:
+        """把创作者事件行转换为报告渲染字典。"""
+        result = dict(row)
+        result["metadata"] = json.loads(
+            result.pop("metadata_json") or "{}"
+        )
+        return result
 
     def begin_run(
         self,
