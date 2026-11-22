@@ -1,6 +1,6 @@
 # Daily Intelligence
 
-Daily Intelligence 是一个面向 Hermes Agent 的轻量技术情报系统 v1.0。它使用 Python 标准库、SQLite、JSON 和 Markdown，代码与运行数据分离，不增加常驻服务、Web Dashboard 或额外机器人。
+Daily Intelligence 是一个面向 Hermes Agent 的轻量个人技术情报系统。第三轮升级后，它使用 Python 标准库、SQLite、JSON 和 Markdown，代码与运行数据分离，不增加常驻服务、Web Dashboard 或额外机器人。
 
 ## 目标与边界
 
@@ -9,6 +9,10 @@ Daily Intelligence 是一个面向 Hermes Agent 的轻量技术情报系统 v1.0
 - 通过 URL、内容指纹和标准库文本相似度做三层去重。
 - 通过 JSON 画像和 SQLite 反馈历史进行可解释推荐。
 - 生成 YYYY-MM-DD.md 日报，供 Hermes Skill 或用户主动查询。
+- 由 Hermes 原生 `web_search`/`web_extract` 搜索并核实 AI、Agent、软件开发新闻，通过 `config/hermes-handoff.json` 与 Python 交接。
+- 获取最终 GitHub 候选项目 README，保存结构化项目分析、证据链接和完整元数据。
+- 生成完整 Markdown、QQ Markdown 阅读版和按项目/新闻边界拆分的消息片段。
+- 记录用户主动查询、喜欢、不感兴趣、收藏和深入了解等结构化反馈，并保留重要内容的跨领域探索位。
 - QQ Bot 继续使用 Hermes 已有的消息路由；本项目不创建 Adapter、不伪造消息、不主动绕过平台限制。
 - 不扫描其他用户聊天记录，只保存结构化兴趣信号和短依据。
 
@@ -24,6 +28,7 @@ DailyIntelligence/
 │   ├── config.py
 │   ├── database.py
 │   ├── deduplication.py
+│   ├── handoff.py
 │   ├── models.py
 │   ├── profile.py
 │   ├── recommendations.py
@@ -46,6 +51,7 @@ DailyIntelligence/
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" init-db
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" collect-github
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" collect-rss
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" import-handoff --file "E:\HermesData\daily-intelligence\config\hermes-handoff.json"
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" report
 ~~~~
 
@@ -53,6 +59,7 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" repor
 
 ~~~~powershell
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" recommend --no-record
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" query "MCP"
 ~~~~
 
 离线检查日报渲染，不访问网络或写运行数据：
@@ -68,8 +75,10 @@ python -m daily_intelligence --data-dir "$env:TEMP\daily-intelligence-manual" dr
 | init-db | 创建 SQLite、画像 JSON、目录和默认 sources.json |
 | collect-github | 使用 GitHub 官方 Search API，保存项目和每日 Star 快照 |
 | collect-rss | 读取 RSS/Atom，保留 24 小时主体和 7 天补充窗口 |
+| import-handoff --file PATH | 校验并导入 Hermes `web_search`/`web_extract` 结果 |
 | recommend | 获取待推荐内容，支持 --type、--limit、--json |
 | feedback TEXT | 解析明确反馈，可用 --target 指定项目 |
+| query TOPIC | 记录一次主动查询主题，三次重复查询后小幅增加权重 |
 | profile show/reset/enable/disable | 查看或管理画像 |
 | report | 按推荐结果保存 Markdown 日报，支持 --date YYYY-MM-DD |
 | dry-run | 使用固定样例渲染日报，不建立运行数据 |
@@ -88,6 +97,8 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" --tim
 - config/user_profile.json：当前用户画像。
 - config/sources.json：实际采集源；可由 config/sources.example.json 初始化。
 - reports/YYYY-MM-DD.md：每日日报。
+- reports/YYYY-MM-DD.qq.md：供 QQ Bot 适配器上传或发送前预览的 Markdown 附件。
+- config/hermes-handoff.json：最近一次通过 schema 校验的 Hermes 搜索/项目分析交接。
 - logs/daily-intelligence.log：CLI 运行日志。
 
 GitHub Token 是可选的。项目根目录的 `.env` 用作本项目独立的凭证入口，实际值由本机用户填写。`.env` 已被 Git 忽略，不要把真实 Token 发到聊天窗口或写入源码、JSON 模板、日报和日志。当前进程已有的 `GITHUB_TOKEN` 优先于项目 `.env`；两处都没有 Token 时继续使用公开 API，并提示配额较低。
@@ -110,11 +121,13 @@ python -m unittest discover -s tests -v
 
 ## Hermes 使用方式
 
-将 `E:\YilenaCode\DailyIntelligence\skills\daily-intelligence-local` 及其他三个 Skill 作为 Hermes 外部只读 Skills 目录，或按 deployment/HERMES_INSTALL.md 复制到目标 Profile 的 Skills 目录。日报 Cron 只执行采集、推荐和保存；QQ Bot 用户主动提问时由 `daily-intelligence-local` Skill 读取日报和数据库后被动回复。
+将 `E:\YilenaCode\DailyIntelligence\skills\daily-intelligence-local` 及其他三个 Skill 作为 Hermes 外部只读 Skills 目录，或按 deployment/HERMES_INSTALL.md 复制到目标 Profile 的 Skills 目录。完整日报流程由 `daily-intelligence-local` 编排：先运行 GitHub/RSS 采集，再让 Hermes 用 `web_search` 覆盖三个新闻领域、用 `web_extract` 核实原文，写入交接 JSON，执行 `import-handoff` 后生成完整和 QQ Markdown 日报。QQ Bot 用户主动提问时由同一 Skill 读取日报、数据库和画像后被动回复。
+
+当前仓库只负责生成本地报告、QQ Markdown 和附件文件，不包含 QQ 适配器或媒体上传实现。Cron 使用 `local` 投递时不能自动推断 QQ 私聊目标；真实主动推送、图片/文件上传和消息限额需要 Hermes 运行环境、官方 API 和用户授权单独验收。
 
 完整模块边界、数据流和未验证项见 docs/architecture.md。
 
 ## Git 交付
 
-开发过程按逻辑阶段形成了本地提交，提交消息使用 feat/fix/chore: 中文描述格式。未配置远程仓库，也未执行 Push。
+开发过程按逻辑阶段形成了本地提交，提交消息使用 `类型：中文描述` 格式；本轮只提交到本地 `main`，未执行 Push。真实 API、Hermes Cron 和 QQ 投递状态见 `deployment/HERMES_INSTALL.md` 与 `docs/maintenance/daily-intelligence/`。
 

@@ -1,8 +1,8 @@
-# Daily Intelligence v1.0 架构与验证记录
+# Daily Intelligence 第三轮架构与验证记录
 
 ## 1. 背景与目标
 
-本项目为 Hermes Agent 提供轻量技术情报能力。目标是减少运行依赖和常驻进程，把稳定的数据处理放在 Python CLI，把自然语言理解、Web Search、QQ Bot 和 Cron 继续交给 Hermes。
+本项目为 Hermes Agent 提供轻量技术情报能力。目标是减少运行依赖和常驻进程，把稳定的数据处理放在 Python CLI，把自然语言理解、原生 Web Search、QQ Bot 和 Cron 继续交给 Hermes。第三轮增加了 README 深度采集、结构化 Hermes 交接、专业日报、QQ Markdown 预览和主动查询画像信号。
 
 ## 2. 模块边界
 
@@ -14,8 +14,9 @@
 | collectors/rss.py | RSS/Atom XML、时间窗口、摘要清洗 | urllib、xml.etree |
 | deduplication.py | URL、Hash、相似度和关联来源 | hashlib、difflib |
 | profile.py | 画像 JSON、显式反馈、隐式信号和排除列表 | json |
-| recommendations.py | 兴趣匹配、时效、Star 和历史冷却评分 | 标准库 |
-| report.py | 分区 Markdown 与原子落盘 | pathlib |
+| handoff.py | Hermes 搜索/项目分析 JSON 校验、原子落盘、导入 | json、tempfile |
+| recommendations.py | 兴趣匹配、重要性、可信度、时效、Star、探索位和历史冷却评分 | 标准库 |
+| report.py | 分区 Markdown、质量指标、QQ Markdown、长消息拆分和原子落盘 | pathlib |
 | cli.py | 命令编排和错误边界 | argparse |
 
 ## 3. 数据流
@@ -28,16 +29,20 @@ flowchart TD
     C --> E[RSS/Atom]
     D --> F[URL/Hash/相似度去重]
     E --> F
+    O[Hermes web_search] --> Q[Hermes web_extract]
+    Q --> R[config/hermes-handoff.json]
+    R --> S[import-handoff 校验与导入]
     F --> G[(SQLite items)]
+    S --> G
     D --> H[(repo_snapshots)]
     G --> I[InterestProfileStore]
     I --> J[(user_profile.json)]
     G --> K[RecommendationEngine]
     J --> K
-    K --> L[(feedback: recommended)]
+    K --> L[(feedback: recommended/query)]
     K --> M[DailyReportRenderer]
     M --> N[reports/YYYY-MM-DD.md]
-    O[Hermes Web Search] -.补充可信来源.-> M
+    M --> T[reports/YYYY-MM-DD.qq.md]
     P[QQ Bot 入站上下文] --> A
 ~~~~
 
@@ -53,7 +58,7 @@ flowchart TD
 
 ### feedback
 
-保存 like、exclude_project、implicit_signal、recommended 等结构化事件。原始命令只保留不超过 160 字的短依据，不保存完整聊天记录。
+保存 like、favorite、deep_dive、exclude_project、decrease_interest、query、implicit_signal、recommended 等结构化事件。原始命令只保留不超过 160 字的短依据，不保存完整聊天记录。
 
 ### runs
 
@@ -69,14 +74,15 @@ flowchart TD
 
 ## 6. 已验证事实
 
-- 当前工作区初始为空，已初始化本地 Git。
-- 当前环境 Python 为 3.13.7，Hermes 源码版本为 v0.23.0。
-- python -m unittest discover -s tests -v 已通过 23 个测试。
-- CLI --version 和无网络 dry-run 已在 Windows 当前环境执行。
+- Hermes 源码和请求转储的只读检查确认当前搜索工具名称为 `web_search`、`web_extract`；本项目不猜测其他工具名。
+- Python CLI 可通过 `import-handoff` 校验 schema 1.0，按领域保存 `search_status`，并把新闻与项目分析写入 SQLite。
+- `python -m unittest discover -s tests -v`、`compileall`、CLI 版本/帮助和离线 dry-run 均作为本轮交付验收项，具体数量写入维护报告。
+- QQ Markdown 文件生成、链接保留和边界拆分有本地测试；真实 QQ 发送、媒体上传和主动推送仍需运行环境验收。
 
 ## 7. 未验证项与风险
 
-- 没有访问真实 GitHub API、RSS 站点或 Hermes Web Search，因此网络超时、站点变更和配额行为仍需部署后观察。
-- 没有修改 Hermes 配置，也没有触发真实 Cron、QQ Bot 入站或被动回复流程。
+- 没有在本轮自动化测试中把 Mock 交接结果当成真实 Web Search 成功；网络超时、站点变更、搜索配额和 Hermes Cron 上下文仍需部署后观察。
+- 没有修改 Hermes 配置，也没有触发真实 Cron、QQ Bot 入站或被动回复流程；当前 Profile 的现有 Cron 只读检查未发现 Daily Intelligence Report 任务。
+- 腾讯 QQ 官方 API 的主动推送、目标会话、Markdown/媒体上传限制需要按目标适配器再次确认；项目只生成可上传的 `.qq.md` 附件和消息片段。
 - GitHub Trending 没有稳定官方 API；默认 CLI 使用官方 Search API，同时提供 parse_trending_html 解析 Hermes 提供的页面补充，并要求保留原文链接。
 

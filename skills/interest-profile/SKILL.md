@@ -1,7 +1,7 @@
 ---
 name: interest-profile
 description: 管理 Daily Intelligence 用户兴趣画像、显式反馈、隐式信号、收藏和排除列表。
-version: 1.0.0
+version: 1.1.0
 author: Daily Intelligence
 license: MIT
 platforms: [windows, linux, macos]
@@ -17,25 +17,30 @@ metadata:
 ## 适用场景
 
 - 用户说“多推荐 Agent 项目”“多关注 MCP”“最近少看模型发布新闻”。
+- 用户说“我对这条内容不感兴趣”或“我想深入了解这个项目”。
 - 用户喜欢、收藏或排除某个项目。
 - 用户要求查看、关闭、开启或重置画像。
+- 用户主动查询某个领域，需要沉淀为长期主题信号。
 - Hermes 需要记录重复关注某类技术的隐式信号。
 
 ## 执行流程
 
 1. 从 config/user_profile.json 读取当前画像；不存在时创建默认兴趣方向。
 2. 明确反馈直接调权或更新排除列表，优先级高于隐式信号。
-3. 隐式信号只保存主题、次数和简短依据；累计三次才增加 2 分，单次提问不改变长期画像。
-4. 收藏和喜欢记录到 favorite_projects，排除记录到 excluded_projects。
+3. 支持喜欢、收藏、不感兴趣、想深入了解、增加/减少主题；项目反馈通过 target 绑定仓库，主题反馈只写兴趣键。
+4. `query TOPIC` 只保存主题、次数和短依据到 `query_signals`/SQLite；累计三次才增加 2 分，单次查询不改变长期画像。
 5. 使用原子文件替换保存 JSON，权重始终限制在 0～100。
-6. 将 like、favorite、exclude_project、implicit_signal、reset、profile_enabled 等事件写入 SQLite feedback。
-7. 推荐时读取 enabled、interests、favorite_projects、excluded_projects 和 excluded_topics。
+6. 将 like、favorite、deep_dive、exclude_project、decrease_interest、query、implicit_signal、reset、profile_enabled 等事件写入 SQLite feedback。
+7. 推荐时读取 enabled、interests、favorite_projects、excluded_projects、excluded_topics 和 query_signals；高重要性内容仍保留探索机会。
 
 ## 输入与输出
 
 ~~~~powershell
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" feedback "多关注 MCP"
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" feedback "不要再推荐这个项目" --target "owner/repo"
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" feedback "我对这条内容不感兴趣" --target "owner/repo"
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" feedback "我想深入了解这个项目" --target "owner/repo"
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" query "MCP"
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" profile show --json
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" profile disable
 ~~~~

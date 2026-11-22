@@ -53,6 +53,79 @@ class SkillLayoutTestCase(unittest.TestCase):
                     ).is_file()
                 )
 
+    def test_workflow_documents_native_search_and_json_handoff(self) -> None:
+        """Skill 文档应写明真实 Web 工具、交接命令和失败状态。"""
+        root = Path(__file__).resolve().parents[1]
+        local_text = (
+            root
+            / "skills"
+            / "daily-intelligence-local"
+            / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        news_text = (
+            root
+            / "skills"
+            / "tech-news-radar"
+            / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        github_text = (
+            root
+            / "skills"
+            / "github-radar"
+            / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        profile_text = (
+            root
+            / "skills"
+            / "interest-profile"
+            / "SKILL.md"
+        ).read_text(encoding="utf-8")
+
+        for phrase in (
+            "web_search",
+            "web_extract",
+            "import-handoff",
+            "search_status",
+            "QQ 主动推送",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(
+                    phrase,
+                    local_text,
+                )
+        for phrase in (
+            "至少两组",
+            "published_at",
+            "source_verified",
+            "time_unverified",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(
+                    phrase,
+                    news_text,
+                )
+        for phrase in (
+            "README",
+            "project_analysis",
+            "recommendation_reason",
+            "evidence_urls",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(
+                    phrase,
+                    github_text,
+                )
+        for phrase in (
+            "query",
+            "不感兴趣",
+            "想深入了解",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(
+                    phrase,
+                    profile_text,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

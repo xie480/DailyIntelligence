@@ -1,5 +1,20 @@
 # Changelog
 
+## [第三轮升级] - 2026-11-22
+
+### Added
+
+- GitHub 最终候选 README Base64 解析、长度限制、项目元数据和结构化 `project_analysis` 交接。
+- Hermes `web_search`/`web_extract` 的 schema 1.0 JSON 交接、原子写入、状态校验和 `import-handoff` CLI。
+- 专业分区日报、QQ Markdown 阅读版、消息边界拆分、采集状态和轻量质量指标。
+- 主动查询 `query` CLI、结构化查询信号、“不感兴趣/想深入了解”反馈，以及高重要性内容探索位。
+- 四个 Hermes Skill、README、部署说明和示例交接路径更新。
+
+### Verification boundary
+
+- 本地 unittest、compileall、CLI 版本/帮助和 dry-run 属于自动化/离线验证。
+- Hermes Cron、真实 Web Search、真实 GitHub/RSS 网络、QQ 入站/主动推送和图片/文件媒体上传仍需目标环境单独验收。
+
 ## [1.0.0] - 2026-11-21
 
 ### Added

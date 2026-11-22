@@ -1,0 +1,110 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-11-22T09:30:00+08:00",
+  "timezone": "Asia/Shanghai",
+  "window_hours": 24,
+  "search_status": {
+    "ai": "success",
+    "agent": "success",
+    "software": "partial"
+  },
+  "search_queries": {
+    "ai": [
+      "official AI model product announcements last 24 hours",
+      "open source model inference multimodal research updates last 24 hours"
+    ],
+    "agent": [
+      "Agent framework MCP Skills announcements last 24 hours",
+      "Agent coding browser automation memory infrastructure updates last 24 hours"
+    ],
+    "software": [
+      "developer tools IDE language framework releases last 24 hours",
+      "software supply chain security database build test deployment updates last 24 hours"
+    ]
+  },
+  "news": [
+    {
+      "title": "Example AI platform release",
+      "category": "ai",
+      "source_name": "Example Official Blog",
+      "published_at": "2026-11-22T08:00:00+08:00",
+      "event_at": "2026-11-22T07:30:00+08:00",
+      "updated_at": null,
+      "url": "https://example.com/ai-release",
+      "summary": "示例新闻：官方发布新的模型能力和开发者接口。",
+      "key_changes": [
+        "新增结构化工具调用能力",
+        "提供更清晰的开发者迁移说明"
+      ],
+      "importance": 84,
+      "why_it_matters": "开发者可以据此评估现有 Agent 工作流的迁移成本。",
+      "source_verified": true,
+      "evidence_urls": [
+        "https://example.com/ai-release"
+      ]
+    },
+    {
+      "title": "Example MCP ecosystem update",
+      "category": "agent",
+      "source_name": "Example Maintainer Announcement",
+      "published_at": "2026-11-22T07:00:00+08:00",
+      "event_at": null,
+      "updated_at": null,
+      "url": "https://example.com/mcp-update",
+      "summary": "示例新闻：维护者公布 MCP 工具发现和权限控制的更新。",
+      "key_changes": [
+        "增加工具元数据校验",
+        "补充本地开发调试流程"
+      ],
+      "importance": 90,
+      "why_it_matters": "这会影响本地 Agent 选择工具和审计调用的方式。",
+      "source_verified": true,
+      "evidence_urls": [
+        "https://example.com/mcp-update"
+      ]
+    },
+    {
+      "title": "Example developer security bulletin",
+      "category": "software",
+      "source_name": "Example Security Bulletin",
+      "published_at": "2026-11-22T06:30:00+08:00",
+      "event_at": null,
+      "updated_at": null,
+      "url": "https://example.com/security-bulletin",
+      "summary": "示例新闻：开发工具供应链发布安全修复和升级建议。",
+      "key_changes": [
+        "修复构建依赖解析问题",
+        "建议升级到受支持版本"
+      ],
+      "importance": 95,
+      "why_it_matters": "它与构建和发布链路直接相关，适合作为跨领域探索内容。",
+      "source_verified": true,
+      "evidence_urls": [
+        "https://example.com/security-bulletin"
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "repository": "example/agent-tool",
+      "summary": "示例项目：面向本地开发流程的 Agent 工具编排器。",
+      "features": [
+        "支持 MCP 工具路由",
+        "提供本地配置和调试命令"
+      ],
+      "use_cases": [
+        "构建可重复的本地自动化流程",
+        "验证 Agent 工具权限"
+      ],
+      "recommendation_reason": "示例项目同时覆盖 Agent 工具调用和本地开发效率。",
+      "evidence_urls": [
+        "https://github.com/example/agent-tool",
+        "https://github.com/example/agent-tool#readme"
+      ]
+    }
+  ],
+  "collection_stats": {
+    "example_only": true,
+    "note": "仅用于格式演示，不代表真实新闻或真实项目分析。"
+  }
+}

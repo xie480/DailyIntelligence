@@ -1,7 +1,7 @@
 ---
 name: daily-intelligence-local
 description: 调度本地 Daily Intelligence 的采集、去重、推荐、日报查询和用户命令处理，避免与 Hermes Hub 同名 Skill 冲突。
-version: 1.2.0
+version: 1.3.0
 author: Daily Intelligence
 license: MIT
 platforms: [windows, linux, macos]
@@ -25,11 +25,51 @@ metadata:
 
 1. 读取运行数据目录和当前 Profile，不读取其他用户的聊天记录。
 2. 需要新数据时调用 github-radar 和 tech-news-radar 的 Python CLI。
-3. 让 SQLite 完成 URL、指纹、相似度和运行键去重。
-4. 读取 interest-profile 的 JSON 画像和 SQLite 反馈历史。
-5. 使用 RecommendationEngine 生成可解释排序，明确反馈优先于隐式信号。
-6. 通过 DailyReportRenderer 生成并保存当天 Markdown 日报。
-7. 回复用户时只引用数据库或日报中的来源链接；没有来源就说明信息未验证。
+3. 完整日报必须使用 Hermes 当前可用的 `web_search` 搜索 AI、Agent、软件开发三个领域，并用 `web_extract` 打开重要原始页面；不得把 RSS 为空解释为没有新闻。
+4. 将搜索结果和 README 分析写成 `config/hermes-handoff.json`，先由 `import-handoff` 校验和导入，再运行 `report`。
+5. 让 SQLite 完成 URL、指纹、相似度和运行键去重。
+6. 读取 interest-profile 的 JSON 画像和 SQLite 反馈历史。
+7. 使用 RecommendationEngine 生成可解释排序，明确反馈优先于隐式信号，同时为高重要性的新领域内容保留探索位。
+8. 通过 DailyReportRenderer 生成并保存当天 Markdown 日报和 QQ Markdown 阅读版。
+9. 回复用户时只引用数据库或日报中的来源链接；没有来源就说明信息未验证。
+
+## Hermes Web Search 交接
+
+当前已只读确认的 Hermes 原生工具名称是 `web_search` 和 `web_extract`。不要在 Skill 中虚构其他搜索 API，也不要让 Python 进程直接调用 Hermes Agent 工具。
+
+每个领域至少执行两组不同意图的查询。每条合格新闻都应尽量用 `web_extract` 核实原始页面、`published_at` 和 `source_verified`，然后按项目根目录的交接 schema 写入 JSON：
+
+~~~~text
+E:\HermesData\daily-intelligence\config\hermes-handoff.json
+~~~~
+
+交接文件只允许来源、时间、摘要、重要性和证据链接等结构化数据，不得写入 Token、QQ 凭证、代理认证或完整聊天记录。写入后执行：
+
+~~~~powershell
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" import-handoff --file "E:\HermesData\daily-intelligence\config\hermes-handoff.json"
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" report
+~~~~
+
+`search_status` 必须区分 `success`、`empty`、`unavailable`、`network_error`、`page_unavailable`、`time_unverified` 和 `low_confidence`。一个领域失败时继续处理其他领域，日报状态区必须保留失败原因。
+
+## 用户主动查询路由
+
+将用户意图路由到最小必要流程：
+
+| 用户意图 | 处理方式 |
+| --- | --- |
+| 今日完整日报 | GitHub、RSS 和三个领域 Web Search，导入交接后生成完整报告 |
+| 今日 AI/Agent/软件开发新闻 | 只搜索对应领域，仍执行 `web_extract` 和交接校验 |
+| 今天的 GitHub 热点或有趣项目 | 调用 github-radar，必要时读取 README 并导入项目分析 |
+| 深入分析项目或新闻 | 只打开对应的 GitHub/原始来源，引用证据链接 |
+| 查看更多项目或新闻 | 读取数据库中未展示且未排除的条目 |
+| 修改兴趣偏好 | 调用 interest-profile 的 `feedback` 或 `query` CLI |
+
+主动查询主题可记录为结构化信号，不保存完整聊天原文：
+
+~~~~powershell
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" query "MCP"
+~~~~
 
 ## 输入与输出
 
@@ -67,10 +107,17 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" repor
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" recommend --json --no-record
 ~~~~
 
+导入 Hermes 的结构化搜索结果并记录主动查询：
+
+~~~~powershell
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" import-handoff --file "E:\HermesData\daily-intelligence\config\hermes-handoff.json"
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" query "Agent"
+~~~~
+
 ## 与其他 Skills 的关系
 
 - github-radar 负责 GitHub 项目采集和仓库维度去重。
-- tech-news-radar 负责 RSS/Atom 采集；Hermes Web Search 仍由 Hermes 自身执行。
+- tech-news-radar 负责 RSS/Atom 和 Web Search 查询规范；Hermes 用 `web_search`/`web_extract` 执行联网和原文核实，Python 只接收 JSON。
 - interest-profile 负责画像、显式反馈、隐式信号、收藏和排除。
 - 本 Skill 只做调度和用户交互，不复制上述业务逻辑。
 
@@ -88,7 +135,7 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" recom
 4. 日报验收必须使用同一明确 IANA 时区的逻辑日期；分别重复执行 `report --no-record` 和普通 `report`/Cron，两次都比较报告 hash、推荐/运行/采集副作用；检查报告成功落盘后再写入推荐历史，避免数据库与文件状态分叉。
 5. Hermes 接入先确认实际 serving Profile、gateway 平台绑定、`skills.external_dirs`、本地 Skill 来源、Cron `workdir`/时区/投递方式以及 runs/incidents。把 Cron 配置中的 Skill 名称与当前 enabled-local 名称逐字比较；存在同名或过时裸名称时，先用 `hermes skills list --source local --enabled-only -p <profile>` 和精确本地路径确认来源；裸 `hermes skills inspect <name>` 不是本地加载证明。
 6. 分开判断调度器健康和业务成功：`cron doctor`、job 状态为 ok 只能证明调度/Agent 过程完成，还要读取 Cron 输出和项目 SQLite `runs`，确认每个采集阶段的真实结果。
-7. QQ Bot 若由 Hermes 代发，必须把项目代码、Hermes adapter、入站回复和出站投递分别验收；同时检查 `hermes send --list qqbot` 的 channel discovery 和可用工具。已配置或已连接的 adapter 不等于真实投递；先生成 dry-run/消息预览，再进行任何真实发送。没有用户确认的目标、时区和时间，不创建主动 QQ 推送。
+7. QQ Bot 若由 Hermes 代发，必须把项目代码、Hermes adapter、入站回复和出站投递分别验收；同时检查 `hermes send --list qqbot` 的 channel discovery 和可用工具。`QQ 主动推送` 只有在真实目标、Cron 上下文和官方 API 能力都被验证后才能宣称完成；当前项目只生成 QQ Markdown 和附件预览，不擅自发送真实消息。
 
 详细的 Profile、Skill、Cron、幂等和消息集成证据门槛见 `references/acceptance-and-hermes.md`。
 

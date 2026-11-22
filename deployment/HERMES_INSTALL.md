@@ -11,6 +11,8 @@
 | SQLite | E:\HermesData\daily-intelligence\database\intelligence.db |
 | 用户画像 | E:\HermesData\daily-intelligence\config\user_profile.json |
 | 日报 | E:\HermesData\daily-intelligence\reports\YYYY-MM-DD.md |
+| Hermes 交接 | E:\HermesData\daily-intelligence\config\hermes-handoff.json |
+| QQ 阅读版 | E:\HermesData\daily-intelligence\reports\YYYY-MM-DD.qq.md |
 | Skills 源目录 | E:\YilenaCode\DailyIntelligence\skills |
 
 代码与运行数据必须保持分离。不要把数据库、Token、日报或日志提交回 Git 仓库。
@@ -24,6 +26,8 @@
 - Hermes Home 为 E:\HermesData。
 - Hermes 配置示例支持 skills.external_dirs，并将外部目录作为只读 Skills 源。
 - Hermes 的 qqbot 工具集已经存在，当前项目不需要新增消息 Adapter。
+- Hermes 当前可用的原生联网工具名称已从只读 Profile/请求转储确认是 `web_search` 和 `web_extract`；Python 不直接调用这两个 Agent 工具。
+- 当前只读检查到的 Hermes Cron 配置没有 Daily Intelligence Report 任务，不能把旧配置或用户任务描述当作当前已生效状态。
 
 部署机器应再次检查版本和路径，不要假定未来版本的配置字段完全一致。
 
@@ -102,8 +106,10 @@ hermes skills inspect daily-intelligence-local
 Set-Location "E:\YilenaCode\DailyIntelligence"
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" collect-github
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" collect-rss
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" import-handoff --file "E:\HermesData\daily-intelligence\config\hermes-handoff.json"
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" recommend --json
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" report
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" query "MCP"
 ~~~~
 
 采集命令有按日期的 runs 幂等保护；失败会保存 failed 状态，下次执行允许重试。
@@ -131,8 +137,11 @@ hermes cron list
 在 E:\YilenaCode\DailyIntelligence 工作目录执行：
 1. python -m daily_intelligence --data-dir E:\HermesData\daily-intelligence collect-github
 2. python -m daily_intelligence --data-dir E:\HermesData\daily-intelligence collect-rss
-3. python -m daily_intelligence --data-dir E:\HermesData\daily-intelligence report
-只保存日报和运行结果，不向任何外部平台主动发送消息。
+3. 使用 Hermes 原生 `web_search` 对 AI、Agent、软件开发各执行至少两组查询。
+4. 对重要结果使用 `web_extract` 核实原始页面，按 schema 1.0 写入 E:\HermesData\daily-intelligence\config\hermes-handoff.json。
+5. python -m daily_intelligence --data-dir E:\HermesData\daily-intelligence import-handoff --file E:\HermesData\daily-intelligence\config\hermes-handoff.json
+6. python -m daily_intelligence --data-dir E:\HermesData\daily-intelligence report
+只保存日报和运行结果；没有完成目标、权限和消息适配器验收前，不向任何外部平台主动发送消息。
 ~~~~
 
 如果使用 Hermes 的 script 字段，script 必须是 Hermes Home scripts 目录中的文件，而不是把命令行字符串直接放进 script。Cron 的 workdir 应设置为 E:\YilenaCode\DailyIntelligence，timezone 建议设置为 Asia/Shanghai。
@@ -148,7 +157,39 @@ hermes cron list
 
 如果目标环境的入站消息不能交给 Hermes，先检查 Hermes qqbot 平台和 Profile toolset；不要在本项目内重写 QQ 路由。
 
-## 9. 测试命令
+腾讯 QQ 开放平台官方文档列出的消息类型包括文本、Markdown 和媒体；接口的主动推送、Markdown 模板审批、URL 白名单、媒体上传和频率限制必须按目标机器人和 Hermes adapter 的实际配置验证，不能只凭本地文件生成成功来宣称已打通。参考：[QQ 官方消息发送与接收文档](https://github.com/tencent-connect/bot-docs/blob/main/docs/develop/api-v2/server-inter/message/send-receive/send.md)。本项目当前只完成：
+
+官方文档当前还注明主动推送能力自 2025-04-21 起不可用；因此本项目把定时任务默认边界设为本地落盘和入站场景下的被动回复，除非目标平台和适配器提供了经过验证的替代投递能力。
+
+- 生成 `reports/YYYY-MM-DD.qq.md` 完整阅读版。
+- 按 `##`/`###` 章节和完整项目/新闻条目拆分消息，并保留原始链接。
+- 提供本地附件文件，等待 Hermes adapter 按官方媒体上传机制处理。
+
+本项目尚未实现或验证：图片/文件的 QQ 媒体上传、真实私聊主动推送、Cron 上下文消息发送、目标会话发现和发送失败重试。未经用户授权不发送真实 QQ 测试消息。
+
+## 9. 四个 Skills 的职责和结构化交接
+
+| Skill | 职责 |
+| --- | --- |
+| `daily-intelligence-local` | 总入口、用户查询路由、Cron 编排、调用 `web_search`/`web_extract`、运行 `import-handoff`/`report`、生成 QQ 预览 |
+| `github-radar` | GitHub 候选、元数据、Release、最终候选 README、项目分析证据和热点/有趣项目分区 |
+| `tech-news-radar` | RSS 补充、三个领域各至少两组 Web Search 查询、原文核实、时间和状态、跨来源去重 |
+| `interest-profile` | 查询信号、喜欢/收藏/不感兴趣/深入了解、主题权重、排除和探索推荐 |
+
+Hermes 写入交接 JSON 时使用项目 `daily_intelligence.handoff` 的 schema 1.0。根字段包括 `schema_version`、`generated_at`、`timezone`、`window_hours`、`search_status`、`search_queries`、`news`、`projects` 和 `collection_stats`。写入采用同目录临时文件加原子替换，Python 导入前会校验 URL、状态、字段长度和 owner/repo 格式，不接受凭证字段。
+
+## 10. 用户主动查询
+
+QQ 私聊中的自然语言由 `daily-intelligence-local` 识别后路由：完整日报走全流程；只问 AI、Agent 或软件开发时只搜索对应领域；项目/新闻深度分析只打开目标原始来源；兴趣反馈转为 `feedback` 或 `query`。例如：
+
+~~~~powershell
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" query "Agent"
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" feedback "我对纯套壳项目不感兴趣"
+~~~~
+
+`query` 和反馈只存主题键、次数、短依据和时间，不保存完整聊天记录。
+
+## 11. 测试命令
 
 在项目目录执行：
 
@@ -160,7 +201,7 @@ python -m daily_intelligence --data-dir "$env:TEMP\daily-intelligence-manual" dr
 
 测试不会向真实 GitHub、RSS、QQ Bot 或 Hermes 发送请求。真实网络、Cron 和 QQ 流程需要部署后单独观察。
 
-## 10. 回滚方法
+## 12. 回滚方法
 
 代码回滚：
 
@@ -175,7 +216,7 @@ Skill 回滚：从 Hermes Profile 的 skills.external_dirs 中移除项目路径
 
 运行数据回滚：优先保留 E:\HermesData\daily-intelligence 的 database、config 和 reports 作为证据；需要回退数据时先停止相关 Cron，备份整个目录，再恢复备份。不要使用 git reset 删除运行数据。
 
-## 11. 不在本项目范围内的操作
+## 13. 不在本项目范围内的操作
 
 - 不修改 E:\HermesData\config.yaml、Profile 配置或 QQ Bot 凭据。
 - 不安装第三方服务、数据库、Docker、队列或独立 Web 服务。

@@ -214,6 +214,27 @@ class HandoffTestCase(unittest.TestCase):
         with self.assertRaises(HandoffValidationError):
             load_handoff(path)
 
+    def test_repository_handoff_example_is_valid(self) -> None:
+        """仓库提供的交接示例应能直接通过 schema 校验。"""
+        example_path = (
+            Path(__file__).resolve().parents[1]
+            / "config"
+            / "hermes-handoff.example.json"
+        )
+        payload = load_handoff(example_path)
+        self.assertEqual(
+            payload["schema_version"],
+            "1.0",
+        )
+        self.assertEqual(
+            len(payload["news"]),
+            3,
+        )
+        self.assertEqual(
+            payload["search_status"]["software"],
+            "partial",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
