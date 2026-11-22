@@ -67,7 +67,19 @@ python -m daily_intelligence --data-dir <DAILY_INTELLIGENCE_DATA_DIR> creator --
     "monitor_dynamics": true,
     "created_at": "2026-11-22T12:00:00+00:00"
   },
-  "creators": []
+  "creators": [
+    {
+      "id": 123,
+      "platform": "bilibili",
+      "account_key": "123456",
+      "display_name": "示例 UP 主",
+      "profile_url": "https://space.bilibili.com/123456",
+      "status": "active",
+      "monitor_videos": true,
+      "monitor_dynamics": true,
+      "created_at": "2026-11-22T12:00:00+00:00"
+    }
+  ]
 }
 ```
 

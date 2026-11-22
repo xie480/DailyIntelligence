@@ -7,7 +7,8 @@
 - SQLite v2 创作者账号、授权 owner、事件、来源运行和独立检查点表，沿用原有数据库和事务。
 - Bilibili 投稿分页、WBI 签名、空间动态游标、文字/图片/转发/专栏分类和 BV/Dynamic ID 去重。
 - YouTube 公开 Atom Feed、`/channel/UC...`、`/@handle` 与旧式频道页解析，不依赖 Data API Key。
-- `creator add/list/pause/resume/configure/remove` CLI 与 `daily-intelligence-local` Skill 的自然语言管理路由。
+- `creator add/list/pause/resume/configure/remove` CLI 与结构化 `--json` 响应，复用现有账号服务和授权校验。
+- 独立的 `dailyintelligence-creators` Hermes Skill 源文件、命令引用和自然语言目标确认规则。
 - 没有预置授权时首次私聊 sender 自动原子登记为首个 creator owner；`CREATOR_ADMIN_KEYS` 与 `CREATOR_OWNER_KEY` 保留为可选兼容配置。
 - 日报“创作者动态追踪”章节、QQ Markdown 同步渲染、失败状态和报告成功后检查点推进。
 

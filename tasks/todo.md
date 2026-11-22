@@ -27,9 +27,9 @@
 
 - [x] 审计现有账号管理、CLI、权限、数据库和 Hermes Skill 规范
 - [x] 记录基线测试与实施计划
-- [ ] 提供结构化创作者 CLI 接口和错误码
-- [ ] 创建 `dailyintelligence-creators` Skill 源文件及命令引用
-- [ ] 补充 Skill/CLI/权限/失败路径测试
-- [ ] 更新 README、部署说明和技术留痕文档
-- [ ] 完成分阶段本地 Git 提交与最终验证
+- [x] 提供结构化创作者 CLI 接口和错误码
+- [x] 创建 `dailyintelligence-creators` Skill 源文件及命令引用
+- [x] 补充 Skill/CLI/权限/失败路径测试
+- [x] 更新 README、部署说明和技术留痕文档
+- [x] 完成分阶段本地 Git 提交与最终验证
 

@@ -101,14 +101,16 @@ python -m daily_intelligence --data-dir "$env:TEMP\daily-intelligence-manual" dr
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" --timezone "Asia/Shanghai" report
 ~~~~
 
-创作者管理命令由 Hermes 传入当前私聊的真实 sender ID。没有预置授权时，首次创作者管理请求会自动登记该 sender ID；后续请求必须使用同一个 ID：
+创作者管理命令由 `dailyintelligence-creators` Skill 通过 Hermes 传入当前私聊的真实 sender ID。没有预置授权时，首次创作者管理请求会自动登记该 sender ID；后续请求必须使用同一个 ID。Skill 使用 `creator --json` 获取结构化成功/失败结果：
 
 ~~~~powershell
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator add --owner-key "qq:user-123" "https://space.bilibili.com/123456"
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator add --owner-key "qq:user-123" "https://www.youtube.com/@example"
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator list --owner-key "qq:user-123"
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator pause bilibili 123456 --owner-key "qq:user-123"
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator --json add --owner-key "qq:user-123" "https://space.bilibili.com/123456"
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator --json add --owner-key "qq:user-123" "https://www.youtube.com/@example"
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator --json list --owner-key "qq:user-123"
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator --json pause bilibili 123456 --owner-key "qq:user-123"
 ~~~~
+
+机器调用应在 `creator` 后加入 `--json`，例如 `creator --json add`、`creator --json list`、`creator --json remove`、`creator --json pause`、`creator --json resume` 和 `creator --json configure`。调用方必须检查退出码和 JSON `ok`，不能把命令发出当作成功。
 
 Bilibili 默认开启视频和动态监控，YouTube 只开启视频监控；直播、YouTube 社区帖子和 Bilibili 直播不会被采集。`@handle` 与旧式 YouTube 频道链接会先解析真实 Channel ID，解析失败时不会写入错误账号。
 
@@ -146,7 +148,9 @@ python -m unittest discover -s tests -v
 
 ## Hermes 使用方式
 
-将 `E:\YilenaCode\DailyIntelligence\skills\daily-intelligence-local` 及其他三个 Skill 作为 Hermes 外部只读 Skills 目录，或按 deployment/HERMES_INSTALL.md 复制到目标 Profile 的 Skills 目录。完整日报流程由 `daily-intelligence-local` 编排：先运行 GitHub/RSS 采集，再让 Hermes 用 `web_search` 覆盖三个新闻领域、用 `web_extract` 核实原文，写入交接 JSON，执行 `import-handoff` 后运行 `report`。`report` 会在同一任务内按账号和内容类型采集创作者更新，最后生成完整和 QQ Markdown 日报。QQ Bot 用户主动提问或管理账号时由同一 Skill 读取日报、数据库和画像后被动回复。
+将 `E:\YilenaCode\DailyIntelligence\skills` 下的 `daily-intelligence-local`、`dailyintelligence-creators` 及其他 Skill 作为 Hermes 外部只读 Skills 目录，或按 deployment/HERMES_INSTALL.md 复制到目标 Profile 的 Skills 目录。完整日报流程由 `daily-intelligence-local` 编排：先运行 GitHub/RSS 采集，再让 Hermes 用 `web_search` 覆盖三个新闻领域、用 `web_extract` 核实原文，写入交接 JSON，执行 `import-handoff` 后运行 `report`。`report` 会在同一任务内按账号和内容类型采集创作者更新，最后生成完整和 QQ Markdown 日报。QQ Bot 用户的创作者账号管理由 `dailyintelligence-creators` 负责，日报查询仍由 `daily-intelligence-local` 负责。
+
+本次交付只保留 Skill 源文件和调用文档，不安装到 Hermes 实际运行目录，不修改 Hermes Profile，不重启 Gateway。
 
 当前仓库只负责生成本地报告、QQ Markdown 和附件文件，不包含 QQ 适配器或媒体上传实现。Cron 使用 `local` 投递时不能自动推断 QQ 私聊目标；真实主动推送、图片/文件上传和消息限额需要 Hermes 运行环境、官方 API 和用户授权单独验收。
 

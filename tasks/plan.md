@@ -135,21 +135,21 @@ Hermes Skills、Cron 与部署文档
 
 ### 阶段 1：结构化 Backend CLI 契约
 
-- [ ] 先补充 CLI `--json` 成功、重复、未授权、删除、暂停、恢复和配置用例，并确认新增用例按预期失败。
-- [ ] 复用现有 service 实现结构化 JSON 成功/失败输出和稳定错误码；不直接操作数据库。
-- [ ] 运行聚焦 CLI/creator 测试、全量 unittest 和 compileall，提交 `feat：提供创作者管理 CLI 结构化接口`。
+- [x] 先补充 CLI `--json` 成功、重复、未授权、删除、暂停、恢复和配置用例，并确认新增用例按预期失败。
+- [x] 复用现有 service 实现结构化 JSON 成功/失败输出和稳定错误码；不直接操作数据库。
+- [x] 运行聚焦 CLI/creator 测试、全量 unittest 和 compileall，提交 `feat：提供创作者管理 CLI 结构化接口`。
 
 ### 阶段 2：Hermes Skill 源文件
 
-- [ ] 新增 `skills/dailyintelligence-creators/SKILL.md` 与 `references/commands.md`。
-- [ ] 明确平台识别、重复处理、列表分组、删除确认、暂停/恢复、监控类型、权限和禁止事项。
-- [ ] 添加 Skill frontmatter/命令一致性静态测试，提交 `feat：新增 DailyIntelligence 创作者 Hermes Skill`。
+- [x] 新增 `skills/dailyintelligence-creators/SKILL.md` 与 `references/commands.md`。
+- [x] 明确平台识别、重复处理、列表分组、删除确认、暂停/恢复、监控类型、权限和禁止事项。
+- [x] 添加 Skill frontmatter/命令一致性静态测试，提交 `feat：新增 DailyIntelligence 创作者 Hermes Skill`。
 
 ### 阶段 3：项目文档与收口
 
-- [ ] 更新 README、Hermes 安装说明和现有总入口 Skill 的职责边界，保留“只开发不安装”限制。
-- [ ] 新增本次技术留痕文档，区分已验证的本地 CLI/测试与未验证的 Hermes 真实安装、QQ 入站和平台网络。
-- [ ] 运行完整测试、compileall、隔离数据库 smoke 和 Skill 静态检查，提交 `docs：补充创作者 Skill 安装交接说明`。
+- [x] 更新 README、Hermes 安装说明和现有总入口 Skill 的职责边界，保留“只开发不安装”限制。
+- [x] 新增本次技术留痕文档，区分已验证的本地 CLI/测试与未验证的 Hermes 真实安装、QQ 入站和平台网络。
+- [x] 运行完整测试、compileall、隔离数据库 smoke 和 Skill 静态检查，提交 `docs：补充创作者 Skill 安装交接说明`。
 
 ## 风险与待验证项
 

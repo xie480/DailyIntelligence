@@ -9,7 +9,7 @@ metadata:
   hermes:
     tags: [daily-intelligence-local, tech-news, github, recommendations, report]
     category: research
-    related_skills: [github-radar, tech-news-radar, interest-profile]
+    related_skills: [github-radar, tech-news-radar, interest-profile, dailyintelligence-creators]
 ---
 
 # Daily Intelligence
@@ -19,7 +19,7 @@ metadata:
 - 用户询问今天的技术日报、历史日报或重点推荐。
 - 用户要求采集 GitHub、RSS 或刷新推荐。
 - 用户要求每周总结、查看或修改兴趣偏好。
-- 用户通过 QQ Bot 添加、查看、暂停、恢复或删除 Bilibili/YouTube 创作者账号。
+- 用户提出 Bilibili/YouTube 创作者账号管理请求时，转交 `dailyintelligence-creators`。
 - Hermes Cron 需要执行一次本地采集和日报保存。
 
 ## 执行流程
@@ -36,20 +36,9 @@ metadata:
 10. 生成后必须读取主 Markdown 和 QQ Markdown，核对逻辑日期、板块、来源状态、展示数量与重点推荐；CLI 返回成功只证明流程返回，不证明报告内容完整或正确。
 11. 回复用户时只引用数据库或日报中的来源链接；没有来源就说明信息未验证。
 
-## 创作者账号管理
+## 创作者账号管理边界
 
-用户可以使用自然语言表达添加、查看、删除、暂停、恢复和修改监控类型的意图。Skill 将消息中的主页链接和稳定发送者 owner 映射为以下本地命令；不要要求用户维护 YAML 或手写 UID：
-
-~~~~powershell
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator add --owner-key <private-sender-id> <URL> [<URL> ...]
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator list --owner-key <private-sender-id>
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator pause <bilibili|youtube> <account-key> --owner-key <private-sender-id>
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator resume <bilibili|youtube> <account-key> --owner-key <private-sender-id>
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator configure <bilibili|youtube> <account-key> --owner-key <private-sender-id> [--no-videos] [--no-dynamics]
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator remove <bilibili|youtube> <account-key> --owner-key <private-sender-id>
-~~~~
-
-`owner-key` 必须由 Hermes 从当前私聊入站上下文注入，不能直接信任用户文本。没有 `CREATOR_ADMIN_KEYS` 时，首次创作者管理请求会自动登记该 sender ID；有预置白名单时只允许白名单中的 sender。Bilibili 默认启用视频和动态，YouTube 只启用视频；直播、YouTube 社区帖子和实时通知都不在范围内。用户只发送链接且没有添加意图时，先询问一次是否添加。
+创作者账号管理由 `dailyintelligence-creators` 专用 Skill 负责。它通过当前私聊 sender ID 调用现有 `creator --json` CLI，并负责链接识别、目标确认、结果校验和面向用户的反馈。本 Skill 不重复执行账号增删改查，也不接受用户自报 owner；日报编排仍可读取账号状态并在报告窗口内采集更新。
 
 ## Hermes Web Search 交接
 

@@ -83,6 +83,8 @@ BILIBILI_COOKIE=
 ~~~~text
 E:\YilenaCode\DailyIntelligence\skills\
 ├── daily-intelligence-local\SKILL.md
+├── dailyintelligence-creators\SKILL.md
+│   └── references\commands.md
 ├── github-radar\SKILL.md
 ├── tech-news-radar\SKILL.md
 └── interest-profile\SKILL.md
@@ -94,11 +96,15 @@ Hermes v0.23.0 的配置示例说明 external_dirs 是只读外部 Skills 目录
 Select-String -Path "E:\HermesData\*.yaml","E:\HermesData\profiles\*\*.yaml" -Pattern "external_dirs" -ErrorAction SilentlyContinue
 ~~~~
 
-优先将项目 Skills 目录加入当前 Profile 的 skills.external_dirs。若组织规范不允许外部目录，再把四个子目录复制到目标 Profile 的 skills 目录，并保留源目录作为版本控制副本。复制目标必须通过当前 Hermes Profile 的配置或 help 输出确认。
+优先将项目 Skills 目录加入当前 Profile 的 skills.external_dirs。若组织规范不允许外部目录，再把五个子目录复制到目标 Profile 的 skills 目录，并保留源目录作为版本控制副本。复制目标必须通过当前 Hermes Profile 的配置或 help 输出确认。
 
 本地调度 Skill 的精确来源路径是：
 
 `E:\YilenaCode\DailyIntelligence\skills\daily-intelligence-local`
+
+创作者管理 Skill 的精确来源路径是：
+
+`E:\YilenaCode\DailyIntelligence\skills\dailyintelligence-creators`
 
 如果当前 Hermes 版本支持按本地来源筛选，使用 `--source local` 和目标 Profile 验证；如果只支持 `skills.external_dirs` 目录级加载，则把项目 `skills` 目录配置为外部目录，并通过本地 Skill 的唯一名称 `daily-intelligence-local` 消除 Hub 冲突。本项目不猜测或修改 Hermes 的 Profile 配置。
 
@@ -108,6 +114,7 @@ Select-String -Path "E:\HermesData\*.yaml","E:\HermesData\profiles\*\*.yaml" -Pa
 hermes skills list
 hermes skills list --source local --enabled-only -p <profile>
 hermes skills inspect daily-intelligence-local
+hermes skills inspect dailyintelligence-creators
 ~~~~
 
 具体命令以目标 Hermes 版本的 help 输出为准；本项目不自动执行安装。
@@ -171,7 +178,7 @@ hermes cron list
 
 如果目标环境的入站消息不能交给 Hermes，先检查 Hermes qqbot 平台和 Profile toolset；不要在本项目内重写 QQ 路由。
 
-账号管理由同一个本地 Skill 路由到 `creator` CLI。自然语言意图包括“添加这个 UP 主/频道”“查看监控账号”“删除/暂停/恢复账号”和“只监控视频/动态”；Skill 必须从当前私聊入站上下文传入真实 sender ID，不能让用户在文本中自报 owner。没有预置授权时，该 ID 会在首次管理请求时自动登记。支持一次消息中的多个主页链接，Bilibili 默认视频与动态均开启，YouTube 仅视频。账号管理不会创建新的定时任务，也不会发送实时通知。
+创作者账号管理由独立的 `dailyintelligence-creators` Skill 路由到 `creator --json` CLI。自然语言意图包括“添加这个 UP 主/频道”“查看监控账号”“删除/暂停/恢复账号”和“只监控视频/动态”；Skill 必须从当前私聊入站上下文传入真实 sender ID，不能让用户在文本中自报 owner。没有预置授权时，该 ID 会在首次管理请求时自动登记。Skill 会先用列表结果解析名称/链接目标，多匹配时要求用户选择，删除始终要求明确确认。Bilibili 默认视频与动态均开启，YouTube 仅视频。账号管理不会创建新的定时任务，也不会发送实时通知。每次调用都要检查退出码和 JSON `ok`，失败时不得反馈成功。
 
 腾讯 QQ 开放平台官方文档列出的消息类型包括文本、Markdown 和媒体；接口的主动推送、Markdown 模板审批、URL 白名单、媒体上传和频率限制必须按目标机器人和 Hermes adapter 的实际配置验证，不能只凭本地文件生成成功来宣称已打通。参考：[QQ 官方消息发送与接收文档](https://github.com/tencent-connect/bot-docs/blob/main/docs/develop/api-v2/server-inter/message/send-receive/send.md)。本项目当前只完成：
 
@@ -183,11 +190,12 @@ hermes cron list
 
 本项目尚未实现或验证：图片/文件的 QQ 媒体上传、真实私聊主动推送、Cron 上下文消息发送、目标会话发现和发送失败重试。创作者平台真实接口、Bilibili Cookie 风控状态、YouTube 频道页面解析也需要目标环境单独验收。未经用户授权不发送真实 QQ 测试消息。
 
-## 9. 四个 Skills 的职责和结构化交接
+## 9. 五个 Skills 的职责和结构化交接
 
 | Skill | 职责 |
 | --- | --- |
-| `daily-intelligence-local` | 总入口、用户查询和创作者账号管理路由、Cron 编排、调用 `web_search`/`web_extract`、运行 `import-handoff`/`report`、生成 QQ 预览 |
+| `daily-intelligence-local` | 总入口、用户查询、Cron 编排、调用 `web_search`/`web_extract`、运行 `import-handoff`/`report`、生成 QQ 预览 |
+| `dailyintelligence-creators` | 只管理 Bilibili/YouTube 创作者账号；识别链接、确认目标、传入可信 sender ID、调用 `creator --json` 并反馈真实结果 |
 | `github-radar` | GitHub 候选、元数据、Release、最终候选 README、项目分析证据和热点/有趣项目分区 |
 | `tech-news-radar` | RSS 补充、三个领域各至少两组 Web Search 查询、原文核实、时间和状态、跨来源去重 |
 | `interest-profile` | 查询信号、喜欢/收藏/不感兴趣/深入了解、主题权重、排除和探索推荐 |
