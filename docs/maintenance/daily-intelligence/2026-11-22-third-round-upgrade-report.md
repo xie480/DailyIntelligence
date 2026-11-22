@@ -78,4 +78,3 @@
 2. 先执行一次只读 Web Search，生成交接 JSON，比较 `search_status`、来源链接、时间字段和 SQLite `runs`，再考虑任何消息适配器动作。
 3. 若仍需定时 QQ 通知，应先根据目标平台能力确认可用的被动回复或替代投递路径，并取得目标、时区和消息预览授权。
 4. 继续保留运行数据在 `E:\HermesData\daily-intelligence`，不要把真实数据库、Token、QQ 凭证或日报回写到代码仓库。
-
