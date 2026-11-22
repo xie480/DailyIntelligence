@@ -204,6 +204,9 @@ class BilibiliClient(_HttpClient):
         payload = self._request_json(
             BILIBILI_NAV_API,
             {},
+            allowed_codes={
+                -101,
+            },
         )
         images = (
             ((payload.get("data") or {}).get("wbi_img") or {})
@@ -224,6 +227,7 @@ class BilibiliClient(_HttpClient):
         self,
         endpoint: str,
         params: dict[str, str],
+        allowed_codes: set[int] | None = None,
     ) -> dict[str, Any]:
         """请求 JSON 并验证 Bilibili code/data 结构。"""
         query = urlencode(
@@ -255,10 +259,14 @@ class BilibiliClient(_HttpClient):
         if not isinstance(payload, dict):
             raise CreatorHttpError("Bilibili 响应结构无效")
         code = payload.get("code")
-        if code not in {
+        accepted_codes = {
             0,
             None,
-        }:
+        }
+        accepted_codes.update(
+            allowed_codes or set()
+        )
+        if code not in accepted_codes:
             message = str(payload.get("message") or "未知错误")
             raise CreatorHttpError(
                 f"Bilibili 接口返回错误 {code}: {message[:120]}"
@@ -904,14 +912,11 @@ def _dynamic_id(
 ) -> str:
     """从不同动态卡片结构提取 Dynamic ID。"""
     desc = record.get("desc") or {}
-    modules = record.get("modules") or {}
-    author = modules.get("module_author") or {}
     return str(
         record.get("id_str")
         or record.get("dynamic_id_str")
         or record.get("dynamic_id")
         or desc.get("dynamic_id_str")
-        or author.get("mid")
         or ""
     ).strip()
 
