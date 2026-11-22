@@ -87,6 +87,47 @@ class DeduplicationTestCase(unittest.TestCase):
             ["Tech Media"],
         )
 
+    def test_deduplicate_items_prefers_verified_official_source(self) -> None:
+        """同一事件跨来源重复时应优先保留已核实的官方来源。"""
+        media = Item(
+            item_type="news",
+            title="Agent runtime 1.0 released",
+            url="https://media.example.com/agent-runtime",
+            source="Tech Media",
+            summary="Agent runtime 1.0 is released.",
+            category="agent",
+        )
+        official = Item(
+            item_type="news",
+            title="Agent runtime 1.0 release",
+            url="https://official.example.com/agent-runtime",
+            source="Official Blog",
+            summary="Agent runtime 1.0 is released.",
+            category="agent",
+            metadata={
+                "source_verified": True,
+            },
+        )
+
+        result = deduplicate_items(
+            [
+                media,
+                official,
+            ],
+            similarity_threshold=0.75,
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].source, "Official Blog")
+        self.assertEqual(
+            result[0].url,
+            "https://official.example.com/agent-runtime",
+        )
+        self.assertIn(
+            "Tech Media",
+            result[0].metadata["related_sources"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

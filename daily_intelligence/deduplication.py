@@ -203,18 +203,40 @@ def _merge_item_sources(
     duplicate: "Item",
 ) -> "Item":
     """把重复条目的来源和链接合并到主条目元数据。"""
-    metadata = dict(current.metadata)
+    if _source_priority(duplicate) > _source_priority(current):
+        primary = duplicate
+        secondary = current
+    else:
+        primary = current
+        secondary = duplicate
+    metadata = dict(primary.metadata)
+    for key, value in secondary.metadata.items():
+        metadata.setdefault(key, value)
     related_sources = list(metadata.get("related_sources", []))
-    if duplicate.source != current.source and duplicate.source not in related_sources:
-        related_sources.append(duplicate.source)
+    if secondary.source != primary.source and secondary.source not in related_sources:
+        related_sources.append(secondary.source)
     related_urls = list(metadata.get("related_urls", []))
-    normalized_current = normalize_url(current.url)
-    normalized_duplicate = normalize_url(duplicate.url)
-    if normalized_duplicate != normalized_current and duplicate.url not in related_urls:
-        related_urls.append(duplicate.url)
+    normalized_primary = normalize_url(primary.url)
+    normalized_secondary = normalize_url(secondary.url)
+    if normalized_secondary != normalized_primary and secondary.url not in related_urls:
+        related_urls.append(secondary.url)
     if related_sources:
         metadata["related_sources"] = related_sources
     if related_urls:
         metadata["related_urls"] = related_urls
-    return current.with_updates(metadata=metadata)
+    return primary.with_updates(metadata=metadata)
+
+
+def _source_priority(
+    item: "Item",
+) -> int:
+    """计算新闻来源可信度，已核实官方来源优先于转载。"""
+    metadata = item.metadata
+    source = item.source.casefold()
+    score = 0
+    if metadata.get("source_verified") is True:
+        score += 2
+    if "official" in source or "官方" in source:
+        score += 1
+    return score
 

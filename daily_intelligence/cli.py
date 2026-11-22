@@ -23,6 +23,7 @@ from .config import (
     timezone_or_default,
 )
 from .database import Database
+from .handoff import import_handoff
 from .models import Item
 from .profile import InterestProfileStore
 from .recommendations import RecommendationEngine
@@ -152,6 +153,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="采集 RSS/Atom 新闻",
     )
     _add_runtime_overrides(rss_parser)
+
+    handoff_parser = subparsers.add_parser(
+        "import-handoff",
+        help="导入 Hermes Web Search 和项目分析 JSON",
+    )
+    _add_runtime_overrides(handoff_parser)
+    handoff_parser.add_argument(
+        "--file",
+        required=True,
+        help="Hermes 生成的结构化交接 JSON",
+    )
 
     recommend_parser = subparsers.add_parser(
         "recommend",
@@ -286,6 +298,7 @@ def _dispatch(
         "init-db": _init_database,
         "collect-github": _collect_github,
         "collect-rss": _collect_rss,
+        "import-handoff": _import_handoff,
         "recommend": _recommend,
         "feedback": _feedback,
         "profile": _profile,
@@ -582,6 +595,57 @@ def _collect_rss(
         )
         print(
             f"RSS 采集失败：{error}",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        database.close()
+
+
+def _import_handoff(
+    args: argparse.Namespace,
+) -> int:
+    """导入 Hermes 搜索结果并记录独立的 Web Search 运行状态。"""
+    paths, database, _ = _runtime(args)
+    current = datetime.now(
+        timezone_or_default(args.timezone),
+    )
+    logical_date = _run_date(
+        args,
+        now=current,
+    )
+    run_key = f"web-search:{logical_date.isoformat()}"
+    if not database.begin_run(
+        "web_search",
+        run_key,
+    ):
+        database.close()
+        print("今日 Web Search 交接已完成或正在运行")
+        return 0
+    try:
+        result = import_handoff(
+            database,
+            args.file,
+            paths.handoff_path,
+        )
+        database.finish_run(
+            run_key,
+            "success",
+        )
+        print(
+            "Web Search 交接完成："
+            f"导入 {result['news_imported']} 条新闻，"
+            f"更新 {result['projects_updated']} 个项目"
+        )
+        return 0
+    except Exception as error:
+        database.finish_run(
+            run_key,
+            "failed",
+            str(error),
+        )
+        print(
+            f"Web Search 交接失败：{error}",
             file=sys.stderr,
         )
         return 1

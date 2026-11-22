@@ -19,6 +19,7 @@ from daily_intelligence.cli import (
 )
 from daily_intelligence.config import RuntimePaths
 from daily_intelligence.database import Database
+from daily_intelligence.handoff import write_handoff
 from daily_intelligence.models import Item
 from tests.test_support import temporary_directory
 
@@ -190,6 +191,73 @@ class CLITestCase(unittest.TestCase):
             DEFAULT_SOURCES,
             example,
         )
+
+    def test_import_handoff_command_persists_status_and_news(self) -> None:
+        """import-handoff 应保存结构化搜索状态并写入新闻。"""
+        source_path = self.runtime_dir / "source-handoff.json"
+        write_handoff(
+            source_path,
+            {
+                "schema_version": "1.0",
+                "generated_at": "2026-11-22T09:30:00+08:00",
+                "timezone": "Asia/Shanghai",
+                "search_status": {
+                    "ai": "success",
+                    "agent": "empty",
+                    "software": "unavailable",
+                },
+                "search_queries": {
+                    "ai": ["model release"],
+                    "agent": ["agent framework"],
+                    "software": ["developer tools"],
+                },
+                "news": [
+                    {
+                        "title": "Search result",
+                        "category": "ai",
+                        "source_name": "Official",
+                        "published_at": "2026-11-22T08:00:00+08:00",
+                        "url": "https://example.com/search-result",
+                        "summary": "Verified result.",
+                        "key_changes": ["A change"],
+                        "importance": 80,
+                        "why_it_matters": "Useful context.",
+                        "source_verified": True,
+                        "evidence_urls": [
+                            "https://example.com/search-result"
+                        ],
+                    }
+                ],
+            },
+        )
+
+        result = main(
+            [
+                "--data-dir",
+                str(self.runtime_dir),
+                "import-handoff",
+                "--file",
+                str(source_path),
+            ]
+        )
+
+        self.assertEqual(result, 0)
+        paths = RuntimePaths.from_data_dir(self.runtime_dir)
+        self.assertTrue(paths.handoff_path.is_file())
+        database = Database(paths.database_path)
+        database.initialize()
+        self.assertEqual(database.count_items(), 1)
+        self.assertEqual(
+            database.list_items(item_type="news", limit=5)[0]["metadata"][
+                "search_status"
+            ],
+            "success",
+        )
+        run = database.connection.execute(
+            "SELECT status FROM runs WHERE run_type = 'web_search'"
+        ).fetchone()
+        self.assertEqual(run["status"], "success")
+        database.close()
 
     def test_run_date_uses_requested_timezone_at_midnight_boundary(self) -> None:
         """CLI 逻辑日期应由同一个显式时区计算。"""

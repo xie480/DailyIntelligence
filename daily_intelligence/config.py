@@ -23,6 +23,7 @@ LOG_FILE_NAME = "daily-intelligence.log"
 DATABASE_FILE_NAME = "intelligence.db"
 PROFILE_FILE_NAME = "user_profile.json"
 SOURCES_FILE_NAME = "sources.json"
+HERMES_HANDOFF_FILE_NAME = "hermes-handoff.json"
 PROJECT_ENV_FILE_NAME = ".env"
 GITHUB_TOKEN_NAME = "GITHUB_TOKEN"
 GITHUB_PROXY_NAME = "GITHUB_PROXY"
@@ -302,6 +303,7 @@ class RuntimePaths:
     config_dir: Path
     profile_path: Path
     sources_path: Path
+    handoff_path: Path
     reports_dir: Path
     logs_dir: Path
 
@@ -318,6 +320,7 @@ class RuntimePaths:
             config_dir=resolved_dir / CONFIG_DIR_NAME,
             profile_path=resolved_dir / CONFIG_DIR_NAME / PROFILE_FILE_NAME,
             sources_path=resolved_dir / CONFIG_DIR_NAME / SOURCES_FILE_NAME,
+            handoff_path=resolved_dir / CONFIG_DIR_NAME / HERMES_HANDOFF_FILE_NAME,
             reports_dir=resolved_dir / REPORTS_DIR_NAME,
             logs_dir=resolved_dir / LOGS_DIR_NAME,
         )

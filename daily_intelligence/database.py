@@ -271,6 +271,78 @@ class Database:
             for row in rows
         ]
 
+    def enrich_repository(
+        self,
+        repo_full_name: str,
+        analysis: dict[str, Any],
+    ) -> int:
+        """把 Hermes 对 README 的结构化分析合并到仓库元数据。"""
+        repository = repo_full_name.strip()
+        if not repository:
+            return 0
+        rows = self.connection.execute(
+            """
+            SELECT id, summary, content, metadata_json
+            FROM items
+            WHERE item_type = 'github' AND repo_full_name = ?
+            """,
+            (repository,),
+        ).fetchall()
+        if not rows:
+            return 0
+        clean_analysis = dict(analysis)
+        summary = str(
+            clean_analysis.get("summary") or ""
+        ).strip()
+        content_parts = [
+            summary,
+            " ".join(
+                str(value).strip()
+                for value in clean_analysis.get("features") or []
+                if str(value).strip()
+            ),
+            " ".join(
+                str(value).strip()
+                for value in clean_analysis.get("use_cases") or []
+                if str(value).strip()
+            ),
+        ]
+        with self.transaction():
+            for row in rows:
+                metadata = json.loads(
+                    row["metadata_json"] or "{}"
+                )
+                metadata["project_analysis"] = clean_analysis
+                next_summary = summary or row["summary"]
+                next_content = " ".join(
+                    part
+                    for part in (
+                        row["content"],
+                        *content_parts,
+                    )
+                    if part
+                ).strip()
+                self.connection.execute(
+                    """
+                    UPDATE items
+                    SET summary = ?, content = ?, metadata_json = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        next_summary,
+                        next_content,
+                        json.dumps(
+                            metadata,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        now_iso(),
+                        row["id"],
+                    ),
+                )
+        return len(rows)
+
     def count_items(self) -> int:
         """返回当前项目总数。"""
         row = self.connection.execute(
