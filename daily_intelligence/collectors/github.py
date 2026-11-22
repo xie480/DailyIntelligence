@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import socket
+import ssl
 import time
 from collections import OrderedDict
 from copy import deepcopy
@@ -19,6 +21,8 @@ from urllib.request import (
     HTTPRedirectHandler,
     Request,
     build_opener,
+    getproxies,
+    proxy_bypass,
 )
 
 from ..deduplication import deduplicate_items
@@ -84,13 +88,22 @@ class GitHubNetworkError(URLError):
 
     def __init__(
         self,
-        error_type: str,
+        category: str,
+        reason_type: str,
+        proxy_configured: bool,
         token: str | None = None,
     ) -> None:
-        """创建只记录错误类型的网络异常。"""
+        """创建只记录类别、底层异常类型和代理状态的网络异常。"""
+        self.category = category
+        self.reason_type = reason_type
+        self.proxy_configured = proxy_configured
         super().__init__(
             _redact_text(
-                f"GitHub API network error: {error_type}",
+                "GitHub API network error: "
+                f"category={category}; "
+                f"reason_type={reason_type}; "
+                "proxy="
+                f"{'configured' if proxy_configured else 'not-configured'}",
                 token,
             )
         )
@@ -115,9 +128,11 @@ class _RejectRedirectHandler(HTTPRedirectHandler):
         )
 
 
-_SAFE_OPENER = build_opener(
-    _RejectRedirectHandler()
-)
+def _build_safe_opener() -> Any:
+    """按当前代理环境创建禁止重定向的标准库 opener。"""
+    return build_opener(
+        _RejectRedirectHandler()
+    )
 
 
 def _safe_urlopen(
@@ -125,10 +140,60 @@ def _safe_urlopen(
     timeout: int,
 ) -> Any:
     """使用禁止重定向的标准库 opener 发起请求。"""
-    return _SAFE_OPENER.open(
+    return _build_safe_opener().open(
         request,
         timeout=timeout,
     )
+
+
+def _network_error_details(
+    error: BaseException,
+    proxy_configured: bool,
+) -> tuple[str, str]:
+    """根据 URLError.reason 识别脱敏的网络故障类别。"""
+    reason = getattr(
+        error,
+        "reason",
+        error,
+    )
+    reason_type = type(reason).__name__
+    reason_text = str(reason).casefold()
+    if (
+        isinstance(reason, ssl.SSLError)
+        or "ssl" in reason_type.casefold()
+        or "certificate" in reason_text
+        or "tls" in reason_text
+    ):
+        return "TLS", reason_type
+    if (
+        isinstance(reason, socket.gaierror)
+        or "gaierror" in reason_type.casefold()
+        or "name or service not known" in reason_text
+        or "nodename nor servname" in reason_text
+        or "temporary failure in name resolution" in reason_text
+    ):
+        return "DNS", reason_type
+    if (
+        isinstance(reason, (TimeoutError, socket.timeout))
+        or "timed out" in reason_text
+        or "timeout" in reason_text
+    ):
+        return "timeout", reason_type
+    if proxy_configured and (
+        "proxy" in reason_text
+        or "tunnel" in reason_text
+        or isinstance(
+            reason,
+            ConnectionError,
+        )
+    ):
+        return "proxy", reason_type
+    if isinstance(
+        reason,
+        (ConnectionError, OSError),
+    ):
+        return "connection", reason_type
+    return "network", reason_type
 
 
 def _header_value(
@@ -301,6 +366,11 @@ class GitHubClient:
             max(0, int(retries)),
         )
         self.retries = self.max_retries
+        self.proxy_configured = bool(
+            getproxies()
+        ) and not proxy_bypass(
+            GITHUB_API_HOST,
+        )
         self.max_wait_seconds = float(max_wait_seconds)
         if (
             not isfinite(self.max_wait_seconds)
@@ -443,16 +513,28 @@ class GitHubClient:
                 ConnectionError,
             ) as error:
                 if attempt >= self.retries:
+                    category, reason_type = _network_error_details(
+                        error,
+                        self.proxy_configured,
+                    )
                     raise GitHubNetworkError(
-                        type(error).__name__,
+                        category,
+                        reason_type,
+                        self.proxy_configured,
                         self.token,
                     ) from None
                 wait_seconds = float(
                     2 ** attempt
                 )
                 if wait_seconds > self.max_wait_seconds:
+                    category, reason_type = _network_error_details(
+                        error,
+                        self.proxy_configured,
+                    )
                     raise GitHubNetworkError(
-                        "retry wait exceeds cap",
+                        f"{category}; retry wait exceeds cap",
+                        reason_type,
+                        self.proxy_configured,
                         self.token,
                     ) from None
                 self.sleep_fn(wait_seconds)
@@ -1022,14 +1104,16 @@ class GitHubCollector:
 
     @staticmethod
     def snapshot_date(
-        timezone_name: str = "UTC",
+        timezone_name: str = "Asia/Shanghai",
+        now: datetime | None = None,
     ) -> str:
-        """返回指定时区的当前日期，供 Star 快照使用。"""
-        from zoneinfo import ZoneInfo
+        """返回指定时区的逻辑日期，供 Star 快照使用。"""
+        from ..config import date_in_timezone
 
-        return datetime.now(
-            ZoneInfo(timezone_name)
-        ).date().isoformat()
+        return date_in_timezone(
+            timezone_name,
+            now,
+        ).isoformat()
 
 
 def _parse_stat(
