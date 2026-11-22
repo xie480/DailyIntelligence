@@ -524,6 +524,13 @@ class DailyReportRenderer:
             "## 创作者动态追踪",
             "",
         ]
+        failure_keys = {
+            (
+                str(failure.get("platform") or "").lower(),
+                str(failure.get("content_type") or "").lower(),
+            )
+            for failure in status.get("failures") or []
+        }
         for platform, content_type, title in CREATOR_SECTION_DEFINITIONS:
             values = sorted(
                 grouped[(platform, content_type)],
@@ -538,7 +545,14 @@ class DailyReportRenderer:
             if not values:
                 lines.extend(
                     [
-                        "今日暂无更新。",
+                        (
+                            "采集失败，无法确认今日更新。"
+                            if (
+                                platform,
+                                content_type,
+                            ) in failure_keys
+                            else "今日暂无更新。"
+                        ),
                         "",
                     ]
                 )
@@ -617,6 +631,12 @@ class DailyReportRenderer:
                     300,
                 )
             )
+            images = metadata.get("images") or []
+            for image_url in images[:3]:
+                lines.append(
+                    "   图片："
+                    + str(image_url)
+                )
         elif metadata.get("thumbnail"):
             lines.append(
                 "   封面："

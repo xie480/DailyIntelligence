@@ -1095,6 +1095,20 @@ def _add_creator_accounts(
             resolved_key, resolved_name = youtube_client.resolve_channel(
                 url,
             )
+        elif parsed.platform == "youtube" and not args.display_name:
+            try:
+                resolved_key, resolved_name = youtube_client.resolve_channel(
+                    url,
+                )
+                if resolved_key != parsed.account_key:
+                    raise ValueError(
+                        "YouTube 频道页解析出的 Channel ID 与链接不一致"
+                    )
+            except ValueError:
+                raise
+            except Exception:
+                resolved_key = None
+                resolved_name = None
         elif parsed.platform == "bilibili" and not args.display_name:
             try:
                 resolved_name = bilibili_client.resolve_account_name(

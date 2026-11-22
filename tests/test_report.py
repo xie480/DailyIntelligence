@@ -416,6 +416,7 @@ class ReportTestCase(unittest.TestCase):
 
         self.assertIn("## 创作者动态追踪", markdown)
         self.assertIn("### 今日 B站新视频（0 条）", markdown)
+        self.assertIn("采集失败，无法确认今日更新。", markdown)
         self.assertIn("### 今日 B站新动态（1 条）", markdown)
         self.assertIn("### 今日 YouTube 新视频（1 条）", markdown)
         self.assertIn("Example Channel", markdown)

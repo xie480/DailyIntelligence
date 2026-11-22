@@ -318,11 +318,26 @@ class BilibiliCollector:
             )
             if not records:
                 break
-            page_info = data = payload.get("data") or {}
+            data = payload.get("data") or {}
             page_meta = data.get("page") or {}
             try:
                 current_page = int(page_meta.get("pn") or page)
-                total_pages = int(page_meta.get("count") or 0)
+                page_size_value = int(
+                    page_meta.get("ps")
+                    or 30
+                )
+                total_pages = int(page_meta.get("pages") or 0)
+                if not total_pages:
+                    total_count = int(
+                        page_meta.get("count")
+                        or 0
+                    )
+                    total_pages = (
+                        (total_count + page_size_value - 1)
+                        // page_size_value
+                        if total_count > 0
+                        else 0
+                    )
             except (
                 TypeError,
                 ValueError,

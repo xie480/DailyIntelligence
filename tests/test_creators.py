@@ -236,6 +236,7 @@ class FakeBilibiliClient:
                     },
                     "page": {
                         "count": 2,
+                        "pages": 2,
                         "pn": 1,
                     },
                 }
@@ -254,6 +255,7 @@ class FakeBilibiliClient:
                     },
                     "page": {
                         "count": 2,
+                        "pages": 2,
                         "pn": 2,
                     },
                 }
