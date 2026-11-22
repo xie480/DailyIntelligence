@@ -1,7 +1,7 @@
 ---
 name: daily-intelligence-local
 description: 调度本地 Daily Intelligence 的采集、去重、推荐、日报查询和用户命令处理，避免与 Hermes Hub 同名 Skill 冲突。
-version: 1.3.0
+version: 1.4.0
 author: Daily Intelligence
 license: MIT
 platforms: [windows, linux, macos]
@@ -25,13 +25,14 @@ metadata:
 
 1. 读取运行数据目录和当前 Profile，不读取其他用户的聊天记录。
 2. 需要新数据时调用 github-radar 和 tech-news-radar 的 Python CLI。
-3. 完整日报必须使用 Hermes 当前可用的 `web_search` 搜索 AI、Agent、软件开发三个领域，并用 `web_extract` 打开重要原始页面；不得把 RSS 为空解释为没有新闻。
+3. 完整日报必须使用 Hermes 当前可用的 `web_search` 搜索 AI、Agent、软件开发三个领域；每个领域至少执行两组不同意图的查询，并用 `web_extract` 或当前可用的官方页面读取方式核验重要原始页面。不得把 RSS 为空解释为没有新闻；若页面核验链路暂时不完整，保留已搜索结果并把对应领域标为 `partial` 或具体失败状态。
 4. 将搜索结果和 README 分析写成 `config/hermes-handoff.json`，先由 `import-handoff` 校验和导入，再运行 `report`。
 5. 让 SQLite 完成 URL、指纹、相似度和运行键去重。
 6. 读取 interest-profile 的 JSON 画像和 SQLite 反馈历史。
 7. 使用 RecommendationEngine 生成可解释排序，明确反馈优先于隐式信号，同时为高重要性的新领域内容保留探索位。
 8. 通过 DailyReportRenderer 生成并保存当天 Markdown 日报和 QQ Markdown 阅读版。
-9. 回复用户时只引用数据库或日报中的来源链接；没有来源就说明信息未验证。
+9. 生成后必须读取主 Markdown 和 QQ Markdown，核对逻辑日期、板块、来源状态、展示数量与重点推荐；CLI 返回成功只证明流程返回，不证明报告内容完整或正确。
+10. 回复用户时只引用数据库或日报中的来源链接；没有来源就说明信息未验证。
 
 ## Hermes Web Search 交接
 
@@ -50,7 +51,7 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" impor
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" report
 ~~~~
 
-`search_status` 必须区分 `success`、`empty`、`unavailable`、`network_error`、`page_unavailable`、`time_unverified` 和 `low_confidence`。一个领域失败时继续处理其他领域，日报状态区必须保留失败原因。
+`search_status` 必须区分 `success`、`empty`、`unavailable`、`network_error`、`page_unavailable`、`time_unverified`、`low_confidence` 和实现支持的 `partial`。一个领域失败时继续处理其他领域，日报状态区必须保留失败原因。时间字段只写原文明确给出的粒度；只有日期就保留日期，无法核实时用 `null` 并标记 `time_unverified`，不得把搜索时间或抓取时间当作发布时间。
 
 ## 用户主动查询路由
 
@@ -84,8 +85,9 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" query
 
 ## 幂等与数据一致性
 
-- 把同日 `report --no-record` 与普通 `report`/Cron 作为两类独立验收：前者必须不改变 SQLite 计数和报告 hash；后者也必须重复执行并记录实际副作用，不能用 `--no-record` 的通过替代普通写入路径的结论。
+- 把同日 `report --no-record` 与普通 `report`/Cron 作为两类独立验收：前者必须不改变 SQLite 计数和报告 hash；后者也必须重复执行并记录实际副作用，不能用 `--no-record` 的通过替代普通写入路径的结论。验证内容时先读回落盘报告并比较 hash，再判断板块和条目。
 - 普通 `report` 的 item-level `report_date` 去重不等于整份日报幂等；推荐冷却可能让第二次运行挑选下一批项目。若产品契约要求同日普通 report 完全幂等，应把报告内容或推荐计数变化判为风险/失败，而不是只检查是否出现重复 item_id。
+- 渲染后的总条目数由板块限额和去重决定，`--limit 15` 不保证最终报告包含 15 条；始终以落盘 Markdown 的实际条目数和各板块内容为准，不从 CLI 参数推断覆盖范围。
 - 只为实际写入日报板块的项目记录“已推荐”；被时间窗口、板块限额或去重规则过滤掉的补充项不得伪装成已展示推荐。
 - 部署或修复后至少重复执行一次同日流程，并同时比较日报内容/hash 与 SQLite 中的推荐、运行和采集记录；只看命令返回成功不足以证明幂等。
 - 日报为空时保留真实原因（无合格来源、采集失败、日期窗口或推荐排序过滤），不得用推荐历史或占位条目制造“有内容”的假象。
