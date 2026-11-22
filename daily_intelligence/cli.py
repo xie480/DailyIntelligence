@@ -29,7 +29,7 @@ from .creator_service import (
     CreatorUpdatesService,
     creator_now,
 )
-from .creator_urls import parse_creator_url
+from .creator_urls import CreatorUrlError, parse_creator_url
 from .database import Database
 from .handoff import import_handoff, load_handoff
 from .models import Item
@@ -109,6 +109,20 @@ def _add_runtime_overrides(
         "--timezone",
         default=argparse.SUPPRESS,
         help="覆盖 IANA 时区",
+    )
+
+
+def _add_creator_json_option(
+    parser: argparse.ArgumentParser,
+    default: object = argparse.SUPPRESS,
+) -> None:
+    """为创作者子命令增加结构化 JSON 输出开关。"""
+    parser.add_argument(
+        "--json",
+        dest="creator_json",
+        action="store_true",
+        default=default,
+        help="输出机器可读的 JSON 结果",
     )
 
 
@@ -287,6 +301,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="管理 Bilibili UP 主和 YouTube 频道",
     )
     _add_runtime_overrides(creator_parser)
+    _add_creator_json_option(
+        creator_parser,
+        default=False,
+    )
     creator_subparsers = creator_parser.add_subparsers(
         dest="creator_command",
         required=True,
@@ -296,6 +314,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="添加一个或多个创作者主页链接",
     )
     _add_runtime_overrides(creator_add_parser)
+    _add_creator_json_option(creator_add_parser)
     creator_add_parser.add_argument(
         "urls",
         nargs="+",
@@ -323,6 +342,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="查看当前 owner 的监控账号",
     )
     _add_runtime_overrides(creator_list_parser)
+    _add_creator_json_option(creator_list_parser)
     creator_list_parser.add_argument(
         "--owner-key",
         default=None,
@@ -347,6 +367,7 @@ def build_parser() -> argparse.ArgumentParser:
             help=help_text,
         )
         _add_runtime_overrides(command_parser)
+        _add_creator_json_option(command_parser)
         command_parser.add_argument(
             "platform",
             choices=[
@@ -367,6 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="修改创作者视频/动态监控类型",
     )
     _add_runtime_overrides(creator_configure_parser)
+    _add_creator_json_option(creator_configure_parser)
     creator_configure_parser.add_argument(
         "platform",
         choices=[
@@ -999,6 +1021,14 @@ def _creator(
 ) -> int:
     """处理创作者账号的添加、查询、暂停、恢复和删除命令。"""
     _, database, _ = _runtime(args)
+    creator_json = bool(
+        getattr(
+            args,
+            "creator_json",
+            False,
+        )
+    )
+    command = args.creator_command
     try:
         owner_key = _resolve_creator_owner_key(
             args,
@@ -1006,13 +1036,28 @@ def _creator(
         service = CreatorAccountService(
             database,
         )
-        command = args.creator_command
         if command == "add":
             results = _add_creator_accounts(
                 service,
                 args,
                 owner_key,
             )
+            if creator_json:
+                payload: dict[str, Any] = {
+                    "ok": True,
+                    "action": "add_creator",
+                    "creators": results,
+                }
+                if len(results) == 1:
+                    payload["creator"] = results[0]
+                print(
+                    json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return 0
             print(
                 json.dumps(
                     results,
@@ -1022,9 +1067,23 @@ def _creator(
             )
             return 0
         if command == "list":
+            accounts = service.list_accounts(owner_key)
+            if creator_json:
+                print(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "action": "list_creators",
+                            "creators": accounts,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return 0
             print(
                 json.dumps(
-                    service.list_accounts(owner_key),
+                    accounts,
                     ensure_ascii=False,
                     indent=2,
                 )
@@ -1036,6 +1095,22 @@ def _creator(
                 args.account_key,
                 owner_key,
             )
+            if creator_json:
+                print(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "action": "remove_creator",
+                            "removed": {
+                                "platform": args.platform,
+                                "account_key": args.account_key,
+                            },
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return 0
             print("创作者账号已删除")
             return 0
         if command == "pause":
@@ -1044,6 +1119,23 @@ def _creator(
                 args.account_key,
                 owner_key,
             )
+            if creator_json:
+                print(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "action": "pause_creator",
+                            "creator": _read_creator_account_state(
+                                database,
+                                args.platform,
+                                args.account_key,
+                            ),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return 0
             print("创作者账号已暂停")
             return 0
         if command == "resume":
@@ -1052,6 +1144,23 @@ def _creator(
                 args.account_key,
                 owner_key,
             )
+            if creator_json:
+                print(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "action": "resume_creator",
+                            "creator": _read_creator_account_state(
+                                database,
+                                args.platform,
+                                args.account_key,
+                            ),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return 0
             print("创作者账号已恢复")
             return 0
         if command == "configure":
@@ -1066,13 +1175,109 @@ def _creator(
                     else not args.no_dynamics
                 ),
             )
+            if creator_json:
+                print(
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "action": "update_creator_monitoring",
+                            "creator": _read_creator_account_state(
+                                database,
+                                args.platform,
+                                args.account_key,
+                            ),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return 0
             print("创作者监控类型已更新")
             return 0
         raise ValueError(
             f"不支持的创作者命令: {command}"
         )
+    except Exception as error:
+        if creator_json:
+            print(
+                json.dumps(
+                    _creator_error_payload(
+                        command,
+                        error,
+                    ),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 1
+        raise
     finally:
         database.close()
+
+
+def _read_creator_account_state(
+    database: Database,
+    platform: str,
+    account_key: str,
+) -> dict[str, Any]:
+    """读取状态变更后的账号，确保 CLI 返回真实持久化结果。"""
+    account = database.get_creator_account(
+        platform,
+        account_key,
+    )
+    if account is None:
+        raise RuntimeError("创作者账号更新后无法读取")
+    return account
+
+
+def _creator_action_name(
+    command: str,
+) -> str:
+    """把 CLI 子命令映射为稳定的 Backend action 名称。"""
+    return {
+        "add": "add_creator",
+        "list": "list_creators",
+        "remove": "remove_creator",
+        "pause": "pause_creator",
+        "resume": "resume_creator",
+        "configure": "update_creator_monitoring",
+    }.get(
+        command,
+        "creator_management",
+    )
+
+
+def _creator_error_code(
+    error: Exception,
+) -> str:
+    """把服务层异常转换为 Skill 可判断的稳定错误码。"""
+    if isinstance(error, PermissionError):
+        return "CREATOR_UNAUTHORIZED"
+    if isinstance(error, CreatorUrlError):
+        return "INVALID_CREATOR_URL"
+    message = str(error)
+    if "已经存在" in message or "UNIQUE" in message.upper():
+        return "CREATOR_ALREADY_EXISTS"
+    if "不存在" in message:
+        return "CREATOR_NOT_FOUND"
+    if "只支持" in message or "监控类型" in message:
+        return "CREATOR_UNSUPPORTED_MONITORING"
+    if isinstance(error, ValueError):
+        return "CREATOR_INVALID_REQUEST"
+    return "CREATOR_BACKEND_ERROR"
+
+
+def _creator_error_payload(
+    command: str,
+    error: Exception,
+) -> dict[str, Any]:
+    """构造不宣称成功的创作者管理失败响应。"""
+    return {
+        "ok": False,
+        "action": _creator_action_name(command),
+        "error_code": _creator_error_code(error),
+        "message": str(error),
+    }
 
 
 def _add_creator_accounts(

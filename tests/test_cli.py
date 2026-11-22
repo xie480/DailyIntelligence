@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -42,6 +42,31 @@ class CLITestCase(unittest.TestCase):
 
     def tearDown(self) -> None:
         """保留清理钩子，目录由 TemporaryDirectory 自动删除。"""
+
+    def _run_creator_json(
+        self,
+        owner_key: str,
+        command_args: list[str],
+    ) -> tuple[int, dict[str, object], str]:
+        """执行创作者 JSON 命令并返回退出码、响应和标准错误。"""
+        output = io.StringIO()
+        error_output = io.StringIO()
+        common = [
+            "--data-dir",
+            str(self.runtime_dir),
+            "creator",
+        ]
+        with redirect_stdout(output), redirect_stderr(error_output):
+            exit_code = main(
+                common
+                + command_args
+                + [
+                    "--owner-key",
+                    owner_key,
+                ]
+            )
+        payload = json.loads(output.getvalue())
+        return exit_code, payload, error_output.getvalue()
 
     def test_parser_accepts_global_data_directory_and_timezone(self) -> None:
         """全局参数应在子命令前指定运行目录和时区。"""
@@ -164,6 +189,201 @@ class CLITestCase(unittest.TestCase):
             self.assertTrue(
                 database.is_creator_owner_authorized("qq:first-sender")
             )
+
+    def test_creator_json_contract_returns_add_and_list_results(self) -> None:
+        """创作者 JSON 接口应返回带 action 和实际账号的结构化结果。"""
+        add_code, add_payload, _ = self._run_creator_json(
+            "qq:owner",
+            [
+                "--json",
+                "add",
+                "--display-name",
+                "测试 UP 主",
+                "https://space.bilibili.com/123456",
+            ],
+        )
+
+        self.assertEqual(add_code, 0)
+        self.assertTrue(add_payload["ok"])
+        self.assertEqual(add_payload["action"], "add_creator")
+        self.assertEqual(
+            add_payload["creator"]["account_key"],
+            "123456",
+        )
+        list_code, list_payload, _ = self._run_creator_json(
+            "qq:owner",
+            [
+                "list",
+                "--json",
+            ],
+        )
+
+        self.assertEqual(list_code, 0)
+        self.assertTrue(list_payload["ok"])
+        self.assertEqual(list_payload["action"], "list_creators")
+        self.assertEqual(
+            list_payload["creators"][0]["profile_url"],
+            "https://space.bilibili.com/123456",
+        )
+
+    def test_creator_json_mutations_return_actual_account_state(self) -> None:
+        """删除、暂停、恢复和监控配置应返回 Backend 的实际状态。"""
+        add_code, _, _ = self._run_creator_json(
+            "qq:owner",
+            [
+                "--json",
+                "add",
+                "--display-name",
+                "测试 UP 主",
+                "https://space.bilibili.com/123456",
+            ],
+        )
+        self.assertEqual(add_code, 0)
+
+        pause_code, pause_payload, _ = self._run_creator_json(
+            "qq:owner",
+            [
+                "pause",
+                "--json",
+                "bilibili",
+                "123456",
+            ],
+        )
+        self.assertEqual(pause_code, 0)
+        self.assertEqual(pause_payload["action"], "pause_creator")
+        self.assertEqual(
+            pause_payload["creator"]["status"],
+            "paused",
+        )
+
+        resume_code, resume_payload, _ = self._run_creator_json(
+            "qq:owner",
+            [
+                "resume",
+                "--json",
+                "bilibili",
+                "123456",
+            ],
+        )
+        self.assertEqual(resume_code, 0)
+        self.assertEqual(resume_payload["action"], "resume_creator")
+        self.assertEqual(
+            resume_payload["creator"]["status"],
+            "active",
+        )
+
+        configure_code, configure_payload, _ = self._run_creator_json(
+            "qq:owner",
+            [
+                "configure",
+                "--json",
+                "bilibili",
+                "123456",
+                "--no-dynamics",
+            ],
+        )
+        self.assertEqual(configure_code, 0)
+        self.assertEqual(
+            configure_payload["action"],
+            "update_creator_monitoring",
+        )
+        self.assertFalse(
+            configure_payload["creator"]["monitor_dynamics"]
+        )
+
+        remove_code, remove_payload, _ = self._run_creator_json(
+            "qq:owner",
+            [
+                "remove",
+                "--json",
+                "bilibili",
+                "123456",
+            ],
+        )
+        self.assertEqual(remove_code, 0)
+        self.assertEqual(remove_payload["action"], "remove_creator")
+        self.assertEqual(
+            remove_payload["removed"]["account_key"],
+            "123456",
+        )
+
+    def test_creator_json_reports_duplicate_without_success(self) -> None:
+        """重复账号应返回非零退出码和稳定错误码。"""
+        command = [
+            "--json",
+            "add",
+            "--display-name",
+            "测试 UP 主",
+            "https://space.bilibili.com/123456",
+        ]
+        first_code, _, _ = self._run_creator_json(
+            "qq:owner",
+            command,
+        )
+        self.assertEqual(first_code, 0)
+
+        second_code, second_payload, _ = self._run_creator_json(
+            "qq:owner",
+            command,
+        )
+        self.assertEqual(second_code, 1)
+        self.assertFalse(second_payload["ok"])
+        self.assertEqual(
+            second_payload["error_code"],
+            "CREATOR_ALREADY_EXISTS",
+        )
+
+    def test_creator_json_rejects_unauthorized_owner(self) -> None:
+        """未授权 owner 不得通过 JSON 接口修改或读取账号。"""
+        add_code, _, _ = self._run_creator_json(
+            "qq:owner",
+            [
+                "--json",
+                "add",
+                "--display-name",
+                "测试 UP 主",
+                "https://space.bilibili.com/123456",
+            ],
+        )
+        self.assertEqual(add_code, 0)
+
+        list_code, payload, _ = self._run_creator_json(
+            "qq:other",
+            [
+                "list",
+                "--json",
+            ],
+        )
+        self.assertEqual(list_code, 1)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(
+            payload["error_code"],
+            "CREATOR_UNAUTHORIZED",
+        )
+
+    def test_creator_json_does_not_report_backend_failure_as_success(self) -> None:
+        """Backend 抛错时 JSON 接口必须返回失败而不能伪报添加成功。"""
+        with patch(
+            "daily_intelligence.cli.CreatorAccountService.add_account",
+            side_effect=RuntimeError("backend unavailable"),
+        ):
+            exit_code, payload, _ = self._run_creator_json(
+                "qq:owner",
+                [
+                    "--json",
+                    "add",
+                    "--display-name",
+                    "测试 UP 主",
+                    "https://space.bilibili.com/123456",
+                ],
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(
+            payload["error_code"],
+            "CREATOR_BACKEND_ERROR",
+        )
 
     def test_report_integrates_creator_updates_before_advancing_result(self) -> None:
         """日报入口应把创作者章节写入两份报告并完成最终化。"""
