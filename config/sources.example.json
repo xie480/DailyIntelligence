@@ -15,7 +15,8 @@
       },
       {
         "name": "Interesting Projects",
-        "query": "stars:>1000 pushed:>2026-01-01",
+        "query": "stars:>1000",
+        "window": "30d",
         "section": "github_interesting"
       }
     ]

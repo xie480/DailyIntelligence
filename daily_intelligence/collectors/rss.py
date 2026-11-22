@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any, Callable, Iterable
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
@@ -38,6 +40,34 @@ class _TextExtractor(HTMLParser):
         ).strip()
 
 
+@dataclass(frozen=True, slots=True)
+class RSSFeedFailure:
+    """记录单个 Feed 的脱敏失败来源和异常类型。"""
+
+    source: str
+    url: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class RSSCollectionResult:
+    """保存 RSS 批次结果及成功、失败 Feed 明细。"""
+
+    items: list[Item]
+    successful_feeds: tuple[str, ...]
+    failures: tuple[RSSFeedFailure, ...]
+
+    @property
+    def success_count(self) -> int:
+        """返回成功 Feed 数量。"""
+        return len(self.successful_feeds)
+
+    @property
+    def failure_count(self) -> int:
+        """返回失败 Feed 数量。"""
+        return len(self.failures)
+
+
 class RSSCollector:
     """读取 RSS/Atom feed 并应用最近时间窗口。"""
 
@@ -62,25 +92,61 @@ class RSSCollector:
         supplement_days: int = 7,
     ) -> list[Item]:
         """采集主窗口和补充窗口内的 RSS/Atom 条目。"""
+        return self.collect_with_report(
+            feeds,
+            now=now,
+            window_hours=window_hours,
+            supplement_days=supplement_days,
+        ).items
+
+    def collect_with_report(
+        self,
+        feeds: Iterable[dict[str, Any]],
+        now: datetime | None = None,
+        window_hours: int = 24,
+        supplement_days: int = 7,
+    ) -> RSSCollectionResult:
+        """逐个采集 Feed，隔离失败并返回批次统计。"""
         current = now or datetime.now(timezone.utc)
         current = self._ensure_aware(current)
         primary_cutoff = current - timedelta(hours=window_hours)
         supplement_cutoff = current - timedelta(days=supplement_days)
         collected: list[Item] = []
+        successful_feeds: list[str] = []
+        failures: list[RSSFeedFailure] = []
         for feed in feeds:
-            xml_content = self._fetch(str(feed.get("url") or ""))
-            root = ElementTree.fromstring(xml_content)
-            for entry in self._entry_nodes(root):
-                item = self._entry_to_item(
-                    entry,
-                    feed,
-                    current,
-                    primary_cutoff,
-                    supplement_cutoff,
+            source = str(
+                feed.get("name")
+                or "RSS Feed"
+            )
+            url = str(feed.get("url") or "")
+            try:
+                xml_content = self._fetch(url)
+                root = ElementTree.fromstring(xml_content)
+                for entry in self._entry_nodes(root):
+                    item = self._entry_to_item(
+                        entry,
+                        feed,
+                        current,
+                        primary_cutoff,
+                        supplement_cutoff,
+                    )
+                    if item:
+                        collected.append(item)
+                successful_feeds.append(source)
+            except Exception as error:
+                failures.append(
+                    RSSFeedFailure(
+                        source=source,
+                        url=url,
+                        reason=self._error_reason(error),
+                    )
                 )
-                if item:
-                    collected.append(item)
-        return deduplicate_items(collected)
+        return RSSCollectionResult(
+            items=deduplicate_items(collected),
+            successful_feeds=tuple(successful_feeds),
+            failures=tuple(failures),
+        )
 
     def _fetch(
         self,
@@ -102,11 +168,35 @@ class RSSCollector:
                     timeout=self.timeout,
                 ) as response:
                     return response.read()
-            except (OSError, TimeoutError):
+            except HTTPError:
+                raise
+            except (
+                URLError,
+                TimeoutError,
+                ConnectionError,
+                OSError,
+            ):
                 if attempt >= self.retries:
                     raise
                 self.sleep_fn(float(2 ** attempt))
         raise RuntimeError("RSS 重试流程异常结束")
+
+    @staticmethod
+    def _error_reason(
+        error: BaseException,
+    ) -> str:
+        """返回不包含 URL、请求体和凭证的异常类型摘要。"""
+        reason = getattr(
+            error,
+            "reason",
+            None,
+        )
+        if reason is None:
+            return type(error).__name__
+        return (
+            f"{type(error).__name__}/"
+            f"{type(reason).__name__}"
+        )
 
     @staticmethod
     def _entry_nodes(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timezone
 import logging
 import os
 from pathlib import Path
@@ -280,11 +280,39 @@ def timezone_or_default(
 
 def now_iso(
     timezone_name: str | None = None,
+    now: datetime | None = None,
 ) -> str:
-    """返回带时区的当前 ISO 8601 时间字符串。"""
-    return datetime.now(
-        timezone_or_default(timezone_name)
+    """返回带时区的 ISO 8601 时间字符串，支持注入时间。"""
+    return now_in_timezone(
+        timezone_name,
+        now,
     ).isoformat(timespec="seconds")
+
+
+def now_in_timezone(
+    timezone_name: str | None = None,
+    now: datetime | None = None,
+) -> datetime:
+    """把可注入的时间转换到指定 IANA 时区。"""
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(
+            tzinfo=timezone.utc,
+        )
+    return current.astimezone(
+        timezone_or_default(timezone_name),
+    )
+
+
+def date_in_timezone(
+    timezone_name: str | None = None,
+    now: datetime | None = None,
+) -> date:
+    """返回指定 IANA 时区的逻辑日期，避免跨午夜日期漂移。"""
+    return now_in_timezone(
+        timezone_name,
+        now,
+    ).date()
 
 
 def configure_logging(

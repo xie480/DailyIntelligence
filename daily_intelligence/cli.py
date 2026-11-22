@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import asdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from . import __version__
 from .collectors.github import GitHubClient, GitHubCollector
@@ -18,6 +19,7 @@ from .config import (
     DEFAULT_TIMEZONE,
     RuntimePaths,
     configure_logging,
+    date_in_timezone,
     timezone_or_default,
 )
 from .database import Database
@@ -44,7 +46,8 @@ DEFAULT_SOURCES = {
             },
             {
                 "name": "Interesting Projects",
-                "query": "stars:>1000 pushed:>2026-01-01",
+                "query": "stars:>1000",
+                "window": "30d",
                 "section": "github_interesting",
             },
         ],
@@ -330,6 +333,70 @@ def _load_sources(
     )
 
 
+GITHUB_WINDOW_DAYS = {
+    "24h": 1,
+    "7d": 7,
+    "30d": 30,
+}
+
+
+def _resolve_github_queries(
+    queries: list[dict[str, Any]] | None,
+    logical_date: date,
+) -> list[dict[str, Any]]:
+    """按逻辑日期展开 GitHub 查询的动态 pushed 时间窗口。"""
+    resolved: list[dict[str, Any]] = []
+    for query_config in queries or []:
+        current = dict(query_config)
+        window_days = current.get("window_days")
+        if window_days is None:
+            window = str(
+                current.get("window")
+                or ""
+            ).casefold()
+            window_days = GITHUB_WINDOW_DAYS.get(
+                window,
+            )
+        try:
+            window_days = int(window_days)
+        except (
+            TypeError,
+            ValueError,
+        ):
+            window_days = 0
+        query = str(
+            current.get("query")
+            or current.get("name")
+            or "github"
+        )
+        if window_days > 0:
+            cutoff = (
+                logical_date
+                - timedelta(days=window_days)
+            ).isoformat()
+            qualifier = f"pushed:>{cutoff}"
+            query = re.sub(
+                r"\bpushed:>\S+",
+                qualifier,
+                query,
+            )
+            if qualifier not in query:
+                query = f"{query} {qualifier}"
+            current["query"] = query
+        resolved.append(current)
+    return resolved
+
+
+def _rss_failure_summary(
+    failures: Iterable[Any],
+) -> str:
+    """拼接 Feed 失败来源和脱敏原因，避免写入响应正文。"""
+    return "；".join(
+        f"{failure.source} ({failure.reason})"
+        for failure in failures
+    )
+
+
 def _init_database(
     args: argparse.Namespace,
 ) -> int:
@@ -358,7 +425,14 @@ def _collect_github(
 ) -> int:
     """执行一次 GitHub 采集并保存 Star 快照。"""
     paths, database, _ = _runtime(args)
-    run_key = f"github:{_run_date(args).isoformat()}"
+    current = datetime.now(
+        timezone_or_default(args.timezone),
+    )
+    logical_date = _run_date(
+        args,
+        now=current,
+    )
+    run_key = f"github:{logical_date.isoformat()}"
     if not database.begin_run(
         "github",
         run_key,
@@ -378,13 +452,17 @@ def _collect_github(
                 file=sys.stderr,
             )
         items = GitHubCollector(client).collect(
-            queries=config.get("queries"),
+            queries=_resolve_github_queries(
+                config.get("queries"),
+                logical_date,
+            ),
             per_page=int(config.get("per_page") or 20),
             include_releases=not args.no_releases
             and bool(config.get("include_releases", True)),
         )
         snapshot_date = GitHubCollector.snapshot_date(
             args.timezone,
+            now=current,
         )
         for item in items:
             database.upsert_item(item)
@@ -421,7 +499,14 @@ def _collect_rss(
 ) -> int:
     """执行一次 RSS/Atom 采集并保存项目。"""
     paths, database, _ = _runtime(args)
-    run_key = f"rss:{_run_date(args).isoformat()}"
+    current = datetime.now(
+        timezone_or_default(args.timezone),
+    )
+    logical_date = _run_date(
+        args,
+        now=current,
+    )
+    run_key = f"rss:{logical_date.isoformat()}"
     if not database.begin_run(
         "rss",
         run_key,
@@ -434,18 +519,56 @@ def _collect_rss(
             args,
             paths,
         ).get("rss") or {}
-        items = RSSCollector().collect(
+        collection = RSSCollector().collect_with_report(
             feeds=config.get("feeds") or [],
+            now=current,
             window_hours=int(config.get("window_hours") or 24),
             supplement_days=int(config.get("supplement_days") or 7),
         )
+        items = collection.items
         for item in items:
             database.upsert_item(item)
+        if collection.failures and not collection.successful_feeds:
+            error = _rss_failure_summary(
+                collection.failures,
+            )
+            database.finish_run(
+                run_key,
+                "failed",
+                error,
+            )
+            print(
+                f"RSS 采集失败：{error}",
+                file=sys.stderr,
+            )
+            return 1
+        if collection.failures:
+            error = _rss_failure_summary(
+                collection.failures,
+            )
+            database.finish_run(
+                run_key,
+                "partial",
+                error,
+            )
+            print(
+                "RSS 采集完成："
+                f"{len(items)} 条，成功 {collection.success_count} 个 Feed，"
+                f"失败 {collection.failure_count} 个 Feed",
+            )
+            print(
+                f"RSS 失败来源：{error}",
+                file=sys.stderr,
+            )
+            return 0
         database.finish_run(
             run_key,
             "success",
         )
-        print(f"RSS 采集完成：{len(items)} 条")
+        print(
+            f"RSS 采集完成：{len(items)} 条，"
+            f"成功 {collection.success_count} 个 Feed，失败 0 个 Feed"
+        )
         return 0
     except Exception as error:
         database.finish_run(
@@ -555,10 +678,10 @@ def _report(
     """生成、保存并打印指定日期的日报路径。"""
     paths, database, profile = _runtime(args)
     try:
-        report_date = date.fromisoformat(
-            args.report_date
+        report_date = (
+            date.fromisoformat(args.report_date)
             if args.report_date
-            else date.today().isoformat()
+            else _run_date(args)
         )
         renderer = DailyReportRenderer()
         engine = RecommendationEngine(
@@ -573,11 +696,6 @@ def _report(
             results,
             total_limit=args.limit,
         )
-        if not args.no_record:
-            engine.record_recommendations(
-                rendered_results,
-                report_date=report_date,
-            )
         markdown = renderer.render(
             results,
             report_date=report_date,
@@ -588,6 +706,11 @@ def _report(
             markdown,
             report_date,
         )
+        if not args.no_record:
+            engine.record_recommendations(
+                rendered_results,
+                report_date=report_date,
+            )
         print(f"日报已保存：{report_path}")
         return 0
     finally:
@@ -624,7 +747,7 @@ def _dry_run(
                 )
             ),
         ],
-        report_date=date.today(),
+        report_date=_run_date(args),
     )
     print(report)
     return 0
@@ -632,11 +755,13 @@ def _dry_run(
 
 def _run_date(
     args: argparse.Namespace,
+    now: datetime | None = None,
 ) -> date:
     """根据命令行时区计算采集运行日期。"""
-    return datetime.now(
-        timezone_or_default(args.timezone)
-    ).date()
+    return date_in_timezone(
+        args.timezone,
+        now,
+    )
 
 
 if __name__ == "__main__":
