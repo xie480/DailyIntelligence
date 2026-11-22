@@ -8,9 +8,13 @@ import shutil
 import unittest
 import uuid
 from contextlib import redirect_stdout
+from datetime import datetime, timezone
 from pathlib import Path
 
-from daily_intelligence.cli import build_parser, main
+from daily_intelligence.cli import DEFAULT_SOURCES, build_parser, main
+from daily_intelligence.config import RuntimePaths
+from daily_intelligence.database import Database
+from daily_intelligence.models import Item
 
 
 class CLITestCase(unittest.TestCase):
@@ -162,6 +166,170 @@ class CLITestCase(unittest.TestCase):
                 / "database"
                 / "intelligence.db"
             ).exists()
+        )
+
+    def test_default_sources_match_example_config(self) -> None:
+        """CLI 默认采集源应与示例配置保持一致。"""
+        example_path = (
+            Path(__file__).resolve().parents[1]
+            / "config"
+            / "sources.example.json"
+        )
+        example = json.loads(
+            example_path.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        self.assertEqual(
+            DEFAULT_SOURCES,
+            example,
+        )
+
+    def test_report_same_date_is_idempotent_for_recommendation_history(
+        self,
+    ) -> None:
+        """同一报告日期重复执行不应追加相同的推荐历史。"""
+        paths = RuntimePaths.from_data_dir(self.runtime_dir)
+        paths.ensure()
+        database = Database(paths.database_path)
+        database.initialize()
+        database.upsert_item(
+            Item(
+                item_type="github",
+                title="acme/report-runtime",
+                url="https://github.com/acme/report-runtime",
+                source="GitHub Search API",
+                summary="Agent runtime used for report idempotency.",
+                category="AI Agent",
+                repo_full_name="acme/report-runtime",
+                metadata={
+                    "section": "github_hot",
+                    "latest_release": {
+                        "published_at": datetime.now(
+                            timezone.utc,
+                        ).isoformat(),
+                    },
+                },
+            )
+        )
+        database.close()
+
+        common = [
+            "--data-dir",
+            str(self.runtime_dir),
+        ]
+        report_arguments = [
+            "report",
+            "--date",
+            "2026-11-22",
+        ]
+        self.assertEqual(
+            main(common + report_arguments),
+            0,
+        )
+        report_path = (
+            self.runtime_dir
+            / "reports"
+            / "2026-11-22.md"
+        )
+        first_report = report_path.read_text(encoding="utf-8")
+        database = Database(paths.database_path)
+        database.initialize()
+        first_feedback_count = len(
+            database.list_feedback(
+                action="recommended",
+                limit=100,
+            )
+        )
+        database.close()
+
+        self.assertEqual(
+            first_feedback_count,
+            1,
+        )
+        self.assertEqual(
+            main(common + report_arguments),
+            0,
+        )
+        second_report = report_path.read_text(encoding="utf-8")
+        database = Database(paths.database_path)
+        database.initialize()
+        second_feedback_count = len(
+            database.list_feedback(
+                action="recommended",
+                limit=100,
+            )
+        )
+        database.close()
+
+        self.assertEqual(
+            second_feedback_count,
+            first_feedback_count,
+        )
+        self.assertEqual(
+            second_report,
+            first_report,
+        )
+
+    def test_report_does_not_record_filtered_rss_supplement(self) -> None:
+        """被日报过滤的 RSS 补充项不应写入推荐历史。"""
+        paths = RuntimePaths.from_data_dir(self.runtime_dir)
+        paths.ensure()
+        database = Database(paths.database_path)
+        database.initialize()
+        database.upsert_item(
+            Item(
+                item_type="news",
+                title="Filtered RSS supplement",
+                url="https://example.com/filtered-supplement",
+                source="Example RSS",
+                summary="A seven day supplement outside the report window.",
+                category="ai",
+                metadata={
+                    "is_primary": False,
+                    "is_supplement": True,
+                    "is_major_supplement": False,
+                },
+            )
+        )
+        database.close()
+
+        self.assertEqual(
+            main(
+                [
+                    "--data-dir",
+                    str(self.runtime_dir),
+                    "report",
+                    "--date",
+                    "2026-11-22",
+                ]
+            ),
+            0,
+        )
+        report_path = (
+            self.runtime_dir
+            / "reports"
+            / "2026-11-22.md"
+        )
+        report = report_path.read_text(encoding="utf-8")
+        database = Database(paths.database_path)
+        database.initialize()
+        feedback_count = len(
+            database.list_feedback(
+                action="recommended",
+                limit=100,
+            )
+        )
+        database.close()
+
+        self.assertNotIn(
+            "Filtered RSS supplement",
+            report,
+        )
+        self.assertEqual(
+            feedback_count,
+            0,
         )
 
 

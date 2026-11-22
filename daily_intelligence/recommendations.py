@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Iterable
 
 from .config import now_iso
 from .database import Database
@@ -87,20 +87,52 @@ class RecommendationEngine:
         )
         selected = results[: max(0, limit)]
         if record:
-            for item in selected:
-                self.database.save_feedback(
-                    action="recommended",
-                    target=item.get("repo_full_name")
-                    or item.get("url")
-                    or "",
-                    item_id=int(item["id"]),
-                    note=item["match_reason"],
-                    signal={
-                        "score": item["recommendation_score"],
-                        "recommended_at": now_iso(),
-                    },
-                )
+            self.record_recommendations(selected)
         return selected
+
+    def record_recommendations(
+        self,
+        items: Iterable[dict[str, Any]],
+        report_date: date | None = None,
+    ) -> int:
+        """记录实际展示的推荐，并按日报日期避免重复写入。"""
+        report_date_value = (
+            report_date.isoformat()
+            if report_date is not None
+            else None
+        )
+        recorded = 0
+        seen_item_ids: set[int] = set()
+        for item in items:
+            item_id = int(item["id"])
+            if item_id in seen_item_ids:
+                continue
+            seen_item_ids.add(item_id)
+            if (
+                report_date_value is not None
+                and self.database.has_recommendation_for_report(
+                    item_id,
+                    report_date_value,
+                )
+            ):
+                continue
+            signal = {
+                "score": item["recommendation_score"],
+                "recommended_at": now_iso(),
+            }
+            if report_date_value is not None:
+                signal["report_date"] = report_date_value
+            self.database.save_feedback(
+                action="recommended",
+                target=item.get("repo_full_name")
+                or item.get("url")
+                or "",
+                item_id=item_id,
+                note=item["match_reason"],
+                signal=signal,
+            )
+            recorded += 1
+        return recorded
 
     def _score_item(
         self,

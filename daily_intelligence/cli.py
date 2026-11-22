@@ -64,6 +64,11 @@ DEFAULT_SOURCES = {
                 "url": "https://huggingface.co/blog/feed.xml",
                 "category": "ai",
             },
+            {
+                "name": "GitHub Blog",
+                "url": "https://github.blog/feed/",
+                "category": "software",
+            },
         ],
     },
 }
@@ -548,19 +553,30 @@ def _report(
     """生成、保存并打印指定日期的日报路径。"""
     paths, database, profile = _runtime(args)
     try:
-        results = RecommendationEngine(
-            database,
-            profile,
-        ).recommend(
-            limit=args.limit,
-            record=not args.no_record,
-        )
         report_date = date.fromisoformat(
             args.report_date
             if args.report_date
             else date.today().isoformat()
         )
-        markdown = DailyReportRenderer().render(
+        renderer = DailyReportRenderer()
+        engine = RecommendationEngine(
+            database,
+            profile,
+        )
+        results = engine.recommend(
+            limit=args.limit,
+            record=False,
+        )
+        rendered_results = renderer.select_rendered_items(
+            results,
+            total_limit=args.limit,
+        )
+        if not args.no_record:
+            engine.record_recommendations(
+                rendered_results,
+                report_date=report_date,
+            )
+        markdown = renderer.render(
             results,
             report_date=report_date,
             total_limit=args.limit,

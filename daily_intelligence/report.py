@@ -22,23 +22,22 @@ SECTION_DEFINITIONS = (
 class DailyReportRenderer:
     """把推荐项目渲染为固定板块的中文 Markdown 日报。"""
 
-    def render(
+    def select_rendered_items(
         self,
         items: Iterable[dict[str, Any]],
-        report_date: date | None = None,
         total_limit: int = 15,
-    ) -> str:
-        """渲染日报主体和三条重点推荐。"""
-        current_date = report_date or date.today()
+    ) -> list[dict[str, Any]]:
+        """筛选实际会出现在日报板块中的项目。"""
         max_items = max(0, total_limit)
-        grouped: dict[str, list[dict[str, Any]]] = {
-            key: []
+        section_counts: dict[str, int] = {
+            key: 0
             for key, _, _ in SECTION_DEFINITIONS
         }
         seen_urls: set[str] = set()
-        all_items: list[dict[str, Any]] = []
+        rendered_items: list[dict[str, Any]] = []
+        considered_items = 0
         for item in items:
-            if len(all_items) >= max_items:
+            if considered_items >= max_items:
                 break
             metadata = item.get("metadata") or {}
             if (
@@ -53,13 +52,38 @@ class DailyReportRenderer:
             if normalized in seen_urls:
                 continue
             seen_urls.add(normalized)
+            considered_items += 1
             item_copy = dict(item)
             section = self._section_for(item_copy)
+            if section not in section_counts:
+                section = "software"
+            if section_counts[section] >= self._section_limit(section):
+                continue
+            section_counts[section] += 1
+            rendered_items.append(item_copy)
+        return rendered_items
+
+    def render(
+        self,
+        items: Iterable[dict[str, Any]],
+        report_date: date | None = None,
+        total_limit: int = 15,
+    ) -> str:
+        """渲染日报主体和三条重点推荐。"""
+        current_date = report_date or date.today()
+        grouped: dict[str, list[dict[str, Any]]] = {
+            key: []
+            for key, _, _ in SECTION_DEFINITIONS
+        }
+        rendered_items = self.select_rendered_items(
+            items,
+            total_limit=total_limit,
+        )
+        for item in rendered_items:
+            section = self._section_for(item)
             if section not in grouped:
                 section = "software"
-            if len(grouped[section]) < self._section_limit(section):
-                grouped[section].append(item_copy)
-            all_items.append(item_copy)
+            grouped[section].append(item)
         output = [
             f"# Daily Intelligence 日报 - {current_date.isoformat()}",
             "",
@@ -82,13 +106,31 @@ class DailyReportRenderer:
                 )
         output.append("## 今日重点推荐")
         output.append("")
-        focus_items = sorted(
-            all_items,
-            key=lambda item: float(
-                item.get("recommendation_score") or 0
+        focus_limit = max(
+            0,
+            min(
+                3,
+                total_limit,
+            ),
+        )
+        focus_items: list[dict[str, Any]] = []
+        focus_urls: set[str] = set()
+        for item in sorted(
+            rendered_items,
+            key=lambda value: float(
+                value.get("recommendation_score") or 0
             ),
             reverse=True,
-        )[: min(3, total_limit)]
+        ):
+            normalized = normalize_url(
+                str(item.get("url") or "")
+            )
+            if normalized in focus_urls:
+                continue
+            focus_urls.add(normalized)
+            focus_items.append(item)
+            if len(focus_items) >= focus_limit:
+                break
         if not focus_items:
             output.append("暂无重点推荐。")
         else:
