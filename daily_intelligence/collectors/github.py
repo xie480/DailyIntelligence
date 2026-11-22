@@ -19,6 +19,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, quote, unquote, urlsplit
 from urllib.request import (
     HTTPRedirectHandler,
+    ProxyHandler,
     Request,
     build_opener,
     getproxies,
@@ -109,6 +110,10 @@ class GitHubNetworkError(URLError):
         )
 
 
+class GitHubProxyConfigError(ValueError):
+    """表示 GITHUB_PROXY 配置无效或会被 NO_PROXY 绕过。"""
+
+
 class _RejectRedirectHandler(HTTPRedirectHandler):
     """拒绝所有重定向，避免 Authorization 被带到其他主机。"""
 
@@ -128,19 +133,83 @@ class _RejectRedirectHandler(HTTPRedirectHandler):
         )
 
 
-def _build_safe_opener() -> Any:
-    """按当前代理环境创建禁止重定向的标准库 opener。"""
-    return build_opener(
+def _validate_proxy_url(
+    value: str,
+) -> tuple[str, str, int | None]:
+    """校验项目代理地址并返回安全元数据，不回显代理内容。"""
+    candidate = value.strip()
+    if not candidate or any(
+        character.isspace()
+        for character in candidate
+    ):
+        raise GitHubProxyConfigError(
+            "GITHUB_PROXY 必须是有效的 http/https 代理地址"
+        )
+    try:
+        parsed = urlsplit(candidate)
+        scheme = parsed.scheme.casefold()
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        raise GitHubProxyConfigError(
+            "GITHUB_PROXY 的 URL 或端口格式无效"
+        ) from None
+    if scheme not in {
+        "http",
+        "https",
+    }:
+        raise GitHubProxyConfigError(
+            "GITHUB_PROXY 只支持 http 或 https scheme"
+        )
+    if not hostname:
+        raise GitHubProxyConfigError(
+            "GITHUB_PROXY 必须包含代理主机名"
+        )
+    if parsed.path not in {
+        "",
+        "/",
+    } or parsed.query or parsed.fragment:
+        raise GitHubProxyConfigError(
+            "GITHUB_PROXY 不得包含路径、查询参数或片段"
+        )
+    if port is not None and not 1 <= port <= 65535:
+        raise GitHubProxyConfigError(
+            "GITHUB_PROXY 端口必须位于 1 到 65535 之间"
+        )
+    return candidate, scheme, port
+
+
+def _build_safe_opener(
+    proxy_url: str | None = None,
+) -> Any:
+    """创建 GitHub 专用 opener，不修改 urllib 全局状态。"""
+    handlers: list[Any] = []
+    if proxy_url:
+        handlers.append(
+            ProxyHandler(
+                {
+                    "http": proxy_url,
+                    "https": proxy_url,
+                }
+            )
+        )
+    handlers.append(
         _RejectRedirectHandler()
+    )
+    return build_opener(
+        *handlers,
     )
 
 
 def _safe_urlopen(
     request: Request,
     timeout: int,
+    proxy_url: str | None = None,
 ) -> Any:
-    """使用禁止重定向的标准库 opener 发起请求。"""
-    return _build_safe_opener().open(
+    """使用 GitHub 专用 opener 发起请求。"""
+    return _build_safe_opener(
+        proxy_url,
+    ).open(
         request,
         timeout=timeout,
     )
@@ -346,11 +415,12 @@ class GitHubClient:
         environ: Mapping[str, str] | None = None,
     ) -> None:
         """初始化可注入网络客户端，便于离线测试。"""
+        settings = load_project_settings(
+            project_root=project_root,
+            environ=environ,
+        )
         runtime_token = (
-            load_project_settings(
-                project_root=project_root,
-                environ=environ,
-            ).github_token
+            settings.github_token
             if token is None
             else token
         )
@@ -366,11 +436,36 @@ class GitHubClient:
             max(0, int(retries)),
         )
         self.retries = self.max_retries
-        self.proxy_configured = bool(
-            getproxies()
-        ) and not proxy_bypass(
-            GITHUB_API_HOST,
-        )
+        self.proxy_mode = "auto"
+        self.proxy_source = settings.github_proxy_source
+        self.proxy_scheme: str | None = None
+        self.proxy_port: int | None = None
+        self._proxy_url: str | None = None
+        explicit_proxy = settings.github_proxy
+        if explicit_proxy:
+            (
+                self._proxy_url,
+                self.proxy_scheme,
+                self.proxy_port,
+            ) = _validate_proxy_url(
+                explicit_proxy,
+            )
+            if proxy_bypass(
+                GITHUB_API_HOST,
+            ):
+                raise GitHubProxyConfigError(
+                    "GITHUB_PROXY 与 NO_PROXY 冲突，"
+                    "api.github.com 将被自动绕过"
+                )
+            self.proxy_mode = "explicit"
+            self.proxy_configured = True
+        else:
+            self.proxy_source = "auto"
+            self.proxy_configured = bool(
+                getproxies()
+            ) and not proxy_bypass(
+                GITHUB_API_HOST,
+            )
         self.max_wait_seconds = float(max_wait_seconds)
         if (
             not isfinite(self.max_wait_seconds)
@@ -379,7 +474,14 @@ class GitHubClient:
             raise ValueError(
                 "max_wait_seconds 必须为有限非负数"
             )
-        self.opener = opener or _safe_urlopen
+        self._http_opener = None
+        if opener is not None:
+            self.opener = opener
+        else:
+            self._http_opener = _build_safe_opener(
+                self._proxy_url,
+            )
+            self.opener = self._http_opener.open
         self.sleep_fn = sleep_fn or time.sleep
         self.time_fn = time_fn or time.time
         self.etag_cache_size = max(
@@ -614,6 +716,13 @@ class GitHubClient:
         request: Request,
     ) -> Any:
         """打开请求并拒绝非 GitHub API 的最终响应地址。"""
+        if self.proxy_mode == "explicit" and proxy_bypass(
+            GITHUB_API_HOST,
+        ):
+            raise GitHubProxyConfigError(
+                "GITHUB_PROXY 与 NO_PROXY 冲突，"
+                "api.github.com 将被自动绕过"
+            )
         response = self.opener(
             request,
             timeout=self.timeout,

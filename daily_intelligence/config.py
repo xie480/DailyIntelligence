@@ -25,6 +25,7 @@ PROFILE_FILE_NAME = "user_profile.json"
 SOURCES_FILE_NAME = "sources.json"
 PROJECT_ENV_FILE_NAME = ".env"
 GITHUB_TOKEN_NAME = "GITHUB_TOKEN"
+GITHUB_PROXY_NAME = "GITHUB_PROXY"
 _ENV_KEY_PATTERN = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*$"
 )
@@ -56,6 +57,14 @@ class ProjectSettings:
     variables: Mapping[str, str] = field(
         repr=False,
     )
+    project_variables: Mapping[str, str] = field(
+        default_factory=dict,
+        repr=False,
+    )
+    process_variables: Mapping[str, str] = field(
+        default_factory=dict,
+        repr=False,
+    )
 
     @property
     def github_token(self) -> str | None:
@@ -63,10 +72,61 @@ class ProjectSettings:
         value = self.variables.get(
             GITHUB_TOKEN_NAME
         )
-        if not isinstance(value, str):
-            return None
-        token = value.strip()
-        return token or None
+        return _clean_setting_value(value)
+
+    @property
+    def github_proxy(self) -> str | None:
+        """返回按进程变量优先级解析的 GitHub 专用代理地址。"""
+        process_value = self.process_variables.get(
+            GITHUB_PROXY_NAME
+        )
+        if _clean_setting_value(process_value):
+            return _clean_setting_value(process_value)
+        project_value = _clean_setting_value(
+            self.project_variables.get(
+                GITHUB_PROXY_NAME
+            )
+        )
+        if project_value:
+            return project_value
+        return _clean_setting_value(
+            self.variables.get(
+                GITHUB_PROXY_NAME
+            )
+        )
+
+    @property
+    def github_proxy_source(self) -> str:
+        """返回 GitHub 专用代理的来源，缺失时返回 auto。"""
+        if _clean_setting_value(
+            self.process_variables.get(
+                GITHUB_PROXY_NAME
+            )
+        ):
+            return "process_env"
+        if _clean_setting_value(
+            self.project_variables.get(
+                GITHUB_PROXY_NAME
+            )
+        ):
+            return "project_env"
+        if _clean_setting_value(
+            self.variables.get(
+                GITHUB_PROXY_NAME
+            )
+        ):
+            return "project_env"
+        return "auto"
+
+
+def _clean_setting_value(
+    value: object,
+) -> str | None:
+    """清理配置值并把空字符串统一为缺失。"""
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
 
 
 def resolve_project_root(
@@ -213,14 +273,23 @@ def load_project_settings(
         if environ is None
         else environ
     )
+    process_values = {
+        key: value
+        for key, value in process_environment.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
     merged = dict(values)
-    for key, value in process_environment.items():
-        if isinstance(key, str) and isinstance(value, str):
-            merged[key] = value
+    merged.update(process_values)
     return ProjectSettings(
         project_root=root,
         env_path=env_path,
         variables=MappingProxyType(merged),
+        project_variables=MappingProxyType(
+            dict(values)
+        ),
+        process_variables=MappingProxyType(
+            process_values
+        ),
     )
 
 
