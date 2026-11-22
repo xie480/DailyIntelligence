@@ -25,7 +25,7 @@ from daily_intelligence.collectors.creators import (
     parse_youtube_feed,
     sign_wbi,
 )
-from daily_intelligence.models import CreatorAccount, CreatorUpdate
+from daily_intelligence.models import CreatorAccount, CreatorUpdate, Item
 from tests.test_support import temporary_directory
 
 
@@ -208,6 +208,60 @@ class CreatorFoundationTestCase(unittest.TestCase):
                 owner_key="qq:owner",
                 monitor_dynamics=True,
             )
+
+    def test_v1_database_migrates_to_creator_schema_without_losing_items(self) -> None:
+        """旧 v1 数据库升级后应保留项目并创建创作者表。"""
+        migration_tempdir = temporary_directory(
+            prefix="daily-intelligence-creator-migration-",
+        )
+        self.addCleanup(
+            migration_tempdir.cleanup,
+        )
+        database_path = (
+            Path(migration_tempdir.name)
+            / "database"
+            / "intelligence.db"
+        )
+        legacy = Database(database_path)
+        legacy.connection.execute(
+            "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+        legacy._apply_v1()
+        legacy.connection.execute(
+            "INSERT INTO schema_version(version, applied_at) VALUES (1, '2026-11-21T00:00:00+00:00')"
+        )
+        legacy.upsert_item(
+            Item(
+                item_type="news",
+                title="Legacy item",
+                url="https://example.com/legacy",
+                source="legacy",
+                summary="Must survive v2 migration.",
+            )
+        )
+        legacy.close()
+
+        upgraded = Database(database_path)
+        upgraded.initialize()
+        self.addCleanup(
+            upgraded.close,
+        )
+        self.assertIsNotNone(
+            upgraded.get_item(1)
+        )
+        tables = {
+            row["name"]
+            for row in upgraded.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        self.assertIn("creator_accounts", tables)
+        self.assertEqual(
+            upgraded.connection.execute(
+                "SELECT MAX(version) FROM schema_version"
+            ).fetchone()[0],
+            2,
+        )
 
 
 class FakeBilibiliClient:
