@@ -103,7 +103,10 @@ class CreatorAccountService:
         created_at: str | None = None,
     ) -> dict[str, Any]:
         """解析并添加账号，handle 必须先解析成真实 Channel ID。"""
-        self._require_owner(owner_key)
+        self._require_owner(
+            owner_key,
+            allow_bootstrap=True,
+        )
         parsed = parse_creator_url(url)
         account_key = (
             resolved_account_key.strip()
@@ -163,7 +166,10 @@ class CreatorAccountService:
         include_paused: bool = True,
     ) -> list[dict[str, Any]]:
         """读取当前授权 owner 的账号列表。"""
-        self._require_owner(owner_key)
+        self._require_owner(
+            owner_key,
+            allow_bootstrap=True,
+        )
         return self.database.list_creator_accounts(
             owner_key=owner_key,
             include_paused=include_paused,
@@ -264,7 +270,10 @@ class CreatorAccountService:
         owner_key: str,
     ) -> dict[str, Any]:
         """校验 owner 授权和账号归属。"""
-        self._require_owner(owner_key)
+        self._require_owner(
+            owner_key,
+            allow_bootstrap=True,
+        )
         account = self.database.get_creator_account(
             platform,
             account_key,
@@ -278,10 +287,17 @@ class CreatorAccountService:
     def _require_owner(
         self,
         owner_key: str,
+        allow_bootstrap: bool = False,
     ) -> None:
-        """拒绝未写入授权表的消息发送者。"""
-        if not self.database.is_creator_owner_authorized(owner_key):
-            raise PermissionError("当前 owner 未获授权管理创作者账号")
+        """校验 owner，必要时将首个私聊 sender 原子登记为 owner。"""
+        if self.database.is_creator_owner_authorized(owner_key):
+            return
+        if (
+            allow_bootstrap
+            and self.database.bootstrap_creator_owner(owner_key)
+        ):
+            return
+        raise PermissionError("当前 owner 未获授权管理创作者账号")
 
 
 @dataclass(frozen=True, slots=True)

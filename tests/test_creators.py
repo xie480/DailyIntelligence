@@ -198,6 +198,37 @@ class CreatorFoundationTestCase(unittest.TestCase):
             bool(service.list_accounts("qq:owner")[0]["monitor_dynamics"])
         )
 
+    def test_first_private_sender_is_bootstrapped_as_creator_owner(self) -> None:
+        """没有预置白名单时，首个私聊 sender 应自动登记为唯一 owner。"""
+        service = CreatorAccountService(self.database)
+
+        account = service.add_account(
+            "https://space.bilibili.com/123456",
+            owner_key="qq:first-sender",
+        )
+
+        self.assertEqual(account["owner_key"], "qq:first-sender")
+        self.assertTrue(
+            self.database.is_creator_owner_authorized("qq:first-sender")
+        )
+        with self.assertRaises(PermissionError):
+            service.list_accounts("qq:second-sender")
+
+    def test_bootstrap_creator_owner_is_atomic_when_owner_already_exists(self) -> None:
+        """首个 owner 登记成功后，其他 sender 不能抢占授权。"""
+        self.assertTrue(
+            self.database.bootstrap_creator_owner("qq:first-sender")
+        )
+        self.assertFalse(
+            self.database.bootstrap_creator_owner("qq:second-sender")
+        )
+        self.assertTrue(
+            self.database.is_creator_owner_authorized("qq:first-sender")
+        )
+        self.assertFalse(
+            self.database.is_creator_owner_authorized("qq:second-sender")
+        )
+
     def test_youtube_account_cannot_enable_dynamic_monitoring(self) -> None:
         """YouTube 账号只允许视频监控。"""
         self.database.authorize_creator_owner("qq:owner")

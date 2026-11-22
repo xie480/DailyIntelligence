@@ -125,6 +125,46 @@ class CLITestCase(unittest.TestCase):
                 )
             self.assertIn("123456", output.getvalue())
 
+    def test_creator_cli_bootstraps_first_sender_without_environment_keys(self) -> None:
+        """首次私聊 sender 可在没有授权环境变量时直接登记账号。"""
+        common = [
+            "--data-dir",
+            str(self.runtime_dir),
+        ]
+        with patch.dict(
+            "os.environ",
+            {
+                "CREATOR_ADMIN_KEYS": "",
+                "CREATOR_OWNER_KEY": "",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                main(
+                    common
+                    + [
+                        "creator",
+                        "add",
+                        "--owner-key",
+                        "qq:first-sender",
+                        "--display-name",
+                        "首个私聊用户",
+                        "https://space.bilibili.com/654321",
+                    ]
+                ),
+                0,
+            )
+            database = Database(
+                self.runtime_dir
+                / "database"
+                / "intelligence.db"
+            )
+            database.initialize()
+            self.addCleanup(database.close)
+            self.assertTrue(
+                database.is_creator_owner_authorized("qq:first-sender")
+            )
+
     def test_report_integrates_creator_updates_before_advancing_result(self) -> None:
         """日报入口应把创作者章节写入两份报告并完成最终化。"""
         captured: dict[str, object] = {}

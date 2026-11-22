@@ -303,7 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
     creator_add_parser.add_argument(
         "--owner-key",
         default=None,
-        help="Hermes 传入的稳定授权 owner 标识",
+        help="Hermes 传入的真实私聊 sender ID",
     )
     creator_add_parser.add_argument(
         "--display-name",
@@ -1148,7 +1148,7 @@ def _resolve_creator_owner_key(
     if not owner_key:
         raise ValueError(
             "创作者管理需要 --owner-key，或配置 CREATOR_OWNER_KEY；"
-            "并确保该值存在 CREATOR_ADMIN_KEYS 白名单"
+            "首次私聊会把该 sender ID 登记为 owner"
         )
     return owner_key
 

@@ -467,6 +467,31 @@ class Database:
                 ),
             )
 
+    def bootstrap_creator_owner(
+        self,
+        owner_key: str,
+    ) -> bool:
+        """在授权表为空时原子登记首个 owner，并返回是否登记成功。"""
+        cleaned = owner_key.strip()
+        if not cleaned:
+            raise ValueError("owner_key 不能为空")
+        with self.transaction():
+            cursor = self.connection.execute(
+                """
+                INSERT INTO creator_authorizations(owner_key, created_at)
+                SELECT ?, ?
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM creator_authorizations
+                )
+                """,
+                (
+                    cleaned,
+                    now_iso(),
+                ),
+            )
+        return cursor.rowcount == 1
+
     def is_creator_owner_authorized(
         self,
         owner_key: str,
