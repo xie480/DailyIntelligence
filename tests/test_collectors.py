@@ -177,6 +177,19 @@ class AlwaysRateLimitedOpener:
 class CollectorTestCase(unittest.TestCase):
     """验证外部采集器在不联网时的解析结果。"""
 
+    def setUp(self) -> None:
+        """隔离本机项目 Token，确保离线测试只使用虚构凭证。"""
+        self.token_environment = patch.dict(
+            os.environ,
+            {
+                "GITHUB_TOKEN": "",
+            },
+        )
+        self.token_environment.start()
+        self.addCleanup(
+            self.token_environment.stop,
+        )
+
     def test_github_collector_parses_repository_and_release(self) -> None:
         """GitHub 搜索结果应转换为项目并携带最新 Release。"""
         opener = FakeOpener(
