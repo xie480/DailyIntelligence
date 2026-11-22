@@ -27,7 +27,7 @@
 
 ## 验证范围与限制
 
-- 回归测试和完整 unittest 使用隔离的 `.test-tmp` 目录，不接触真实运行数据目录。
+- 回归测试和完整 unittest 使用操作系统临时目录；受限沙箱中仅回退到随机测试目录，不接触真实运行数据目录。
 - 本修复未执行真实 RSS/GitHub 网络采集、Hermes Cron、QQ Bot 或 Windows 部署运行；这些运行时边界仍需在目标环境单独复核。
 - 已存在的重复反馈保留作为历史证据；本修复只阻止后续同日报告继续追加。
 
@@ -35,6 +35,6 @@
 
 - `python -m unittest discover -s tests -v`：30 项通过，exit code `0`。
 - `python -m daily_intelligence --version`：输出 `daily_intelligence 1.0.0`，exit code `0`。
-- `python -m daily_intelligence --data-dir .test-tmp\final-dry-run dry-run`：生成隔离样例日报且未创建运行数据库，exit code `0`。
+- `python -m daily_intelligence --data-dir "$env:TEMP\daily-intelligence-final-dry-run" dry-run`：生成隔离样例日报且未创建运行数据库，exit code `0`。
 - `git diff --check`：exit code `0`。
 - unittest 输出了现有的 `ResourceWarning`（限流测试中的 `HTTPError` 清理提示），没有失败测试。
