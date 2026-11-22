@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import sqlite3
 import unittest
 import uuid
 from pathlib import Path
@@ -69,6 +70,70 @@ class FoundationTestCase(unittest.TestCase):
         self.assertEqual(stored["summary"], "Updated summary.")
         self.assertEqual(self.database.count_items(), 1)
 
+    def test_database_initialization_repairs_partial_v1_schema(self) -> None:
+        """schema_version 为 1 时仍应补齐缺失结构并保留已有数据。"""
+        self.database.initialize()
+        item_id = self.database.upsert_item(
+            Item(
+                item_type="news",
+                title="Existing item",
+                url="https://example.com/existing",
+                source="example",
+                summary="Must survive schema repair.",
+            )
+        )
+        self.database.connection.execute(
+            "DROP INDEX idx_items_fingerprint"
+        )
+        self.database.connection.execute(
+            "DROP TABLE feedback"
+        )
+        self.database.connection.commit()
+
+        self.database.initialize()
+
+        stored = self.database.get_item(item_id)
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored["title"], "Existing item")
+        tables = {
+            row["name"]
+            for row in self.database.connection.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table'
+                """
+            )
+        }
+        self.assertIn("feedback", tables)
+        indexes = {
+            row["name"]
+            for row in self.database.connection.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'index'
+                """
+            )
+        }
+        self.assertIn("idx_items_fingerprint", indexes)
+
+    def test_database_enforces_foreign_keys_on_each_connection(self) -> None:
+        """每个数据库连接都应启用 SQLite 外键约束。"""
+        self.database.initialize()
+
+        pragma_value = self.database.connection.execute(
+            "PRAGMA foreign_keys"
+        ).fetchone()[0]
+        self.assertEqual(pragma_value, 1)
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.database.connection.execute(
+                """
+                INSERT INTO feedback(action, item_id, created_at)
+                VALUES ('like', 999999, '2026-11-21T00:00:00+00:00')
+                """
+            )
+
     def test_run_guard_allows_retry_after_failure(self) -> None:
         """成功运行不可重复执行，失败运行允许恢复重试。"""
         self.database.initialize()
@@ -83,7 +148,7 @@ class FoundationTestCase(unittest.TestCase):
     def test_snapshot_growth_and_feedback_history(self) -> None:
         """Star 快照应返回增量，反馈应保留结构化记录。"""
         self.database.initialize()
-        self.database.save_repo_snapshot("acme/demo", "2026-11-20", 100, 10)
+        self.database.save_repo_snapshot("acme/demo", "2026-11-14", 100, 10)
         self.database.save_repo_snapshot("acme/demo", "2026-11-21", 135, 12)
 
         self.assertEqual(self.database.star_growth("acme/demo", 7), 35)
@@ -98,6 +163,17 @@ class FoundationTestCase(unittest.TestCase):
         history = self.database.list_feedback(limit=5)
         self.assertEqual(history[0]["action"], "like")
         self.assertEqual(history[0]["signal"]["topic"], "Agent")
+
+    def test_snapshot_growth_returns_zero_without_cutoff_baseline(self) -> None:
+        """窗口内没有 cutoff 前快照时不应伪造 Star 增长。"""
+        self.database.initialize()
+        self.database.save_repo_snapshot("acme/recent", "2026-11-20", 100, 10)
+        self.database.save_repo_snapshot("acme/recent", "2026-11-21", 135, 12)
+
+        self.assertEqual(
+            self.database.star_growth("acme/recent", 7),
+            0,
+        )
 
 
 if __name__ == "__main__":

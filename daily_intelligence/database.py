@@ -32,6 +32,9 @@ class Database:
             timeout=30,
             check_same_thread=False,
         )
+        self.connection.execute(
+            "PRAGMA foreign_keys = ON"
+        )
         self.connection.row_factory = sqlite3.Row
 
     def initialize(self) -> None:
@@ -49,8 +52,19 @@ class Database:
                 "SELECT MAX(version) AS version FROM schema_version"
             ).fetchone()
             current_version = int(current_row["version"] or 0)
-            if current_version < 1:
+            if current_version <= SCHEMA_VERSION:
                 self._apply_v1()
+            if current_version < SCHEMA_VERSION:
+                self.connection.execute(
+                    """
+                    INSERT INTO schema_version(version, applied_at)
+                    VALUES (?, ?)
+                    """,
+                    (
+                        SCHEMA_VERSION,
+                        now_iso(),
+                    ),
+                )
 
     def close(self) -> None:
         """关闭 SQLite 连接。"""
@@ -134,13 +148,6 @@ class Database:
             );
 
             """,
-        )
-        self.connection.execute(
-            """
-            INSERT INTO schema_version(version, applied_at)
-            VALUES (1, ?)
-            """,
-            (now_iso(),),
         )
 
     def upsert_item(
@@ -398,8 +405,10 @@ class Database:
                 for row in reversed(rows)
                 if date.fromisoformat(row["snapshot_date"]) <= cutoff
             ),
-            rows[-1],
+            None,
         )
+        if baseline is None:
+            return 0
         return int(rows[0]["stars"]) - int(baseline["stars"])
 
     def save_feedback(
@@ -489,6 +498,47 @@ class Database:
             int(row["item_id"])
             for row in rows
         }
+
+    def has_recommendation_for_report(
+        self,
+        item_id: int,
+        report_date: date | str,
+    ) -> bool:
+        """判断项目是否已为指定日报日期记录推荐历史。"""
+        report_date_value = (
+            report_date.isoformat()
+            if isinstance(report_date, date)
+            else str(report_date)
+        )
+        rows = self.connection.execute(
+            """
+            SELECT signal_json, created_at
+            FROM feedback
+            WHERE action = 'recommended'
+              AND item_id = ?
+            ORDER BY id DESC
+            """,
+            (item_id,),
+        ).fetchall()
+        for row in rows:
+            try:
+                signal = json.loads(row["signal_json"] or "{}")
+            except (
+                TypeError,
+                json.JSONDecodeError,
+            ):
+                signal = {}
+            if not isinstance(signal, dict):
+                continue
+            if signal.get("report_date") == report_date_value:
+                return True
+            if (
+                "report_date" not in signal
+                and str(row["created_at"] or "")[:10]
+                == report_date_value
+            ):
+                return True
+        return False
 
     @staticmethod
     def _item_row_to_dict(
