@@ -34,13 +34,13 @@ metadata:
 
 ## 输入与输出
 
-输入是 sources.json 的 queries、per_page、include_releases 和可选环境变量 GITHUB_TOKEN。输出是 item_type 为 github 的 SQLite 记录和 repo_snapshots 记录。
+输入是 sources.json 的 queries、per_page、include_releases，以及由 Daily Intelligence 项目根目录 `.env` 或当前进程环境提供的可选 `GITHUB_TOKEN`。输出是 item_type 为 github 的 SQLite 记录和 repo_snapshots 记录。
 
 ~~~~powershell
 python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" collect-github
 ~~~~
 
-基本功能不要求 Token。设置 GITHUB_TOKEN 只用于提高公开 API 速率额度，不把 Token 写入磁盘。
+基本功能不要求 Token。设置 `GITHUB_TOKEN` 只用于提高公开 API 速率额度；项目会优先使用当前进程变量，其次读取项目 `.env`，不把 Token 写入磁盘。
 
 ## 与其他 Skills 的关系
 

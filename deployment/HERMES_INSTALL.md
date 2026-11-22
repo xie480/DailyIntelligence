@@ -44,13 +44,17 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" init-
 
 该命令只创建 Daily Intelligence 自己的目录、SQLite、画像 JSON 和 sources.json，不修改 Hermes 配置。
 
-如需自定义采集源，可复制 config/sources.example.json 到运行目录的 config/sources.json 后编辑 URL、分类和查询。GitHub Token 只通过环境变量提供：
+如需自定义采集源，可复制 config/sources.example.json 到运行目录的 config/sources.json 后编辑 URL、分类和查询。GitHub Token 由 Daily Intelligence 项目根目录的 `.env` 独立读取：
 
 ~~~~powershell
-$env:GITHUB_TOKEN = "<your-token>"
+Set-Location "E:\YilenaCode\DailyIntelligence"
+if (-not (Test-Path ".env")) {
+    Copy-Item ".env.example" ".env"
+}
+# 仅在本机编辑 .env 中的 GITHUB_TOKEN=，不要把真实值写入命令历史。
 ~~~~
 
-不要把真实 Token 写入 PowerShell 历史、项目文件、sources.json 或日报。
+项目当前进程中的 `GITHUB_TOKEN` 仍优先于 `.env`；没有 Token 时使用匿名公开 API。不要把真实 Token 写入 PowerShell 历史、sources.json、日报或日志。Hermes 只负责调度，不需要向 Python 子进程传递 Token。
 
 ## 4. Skills 源文件和安装目标发现
 
