@@ -56,7 +56,7 @@ report         → RecommendationEngine → DailyReportRenderer → reports/*.md
 3. `CreatorUpdatesService` 在 `_report` 启动时固定 `window_end`，按账号和内容类型隔离失败；事件先幂等保存，报告主 Markdown 和 QQ Markdown 都成功落盘后才推进对应检查点。
 4. Bilibili 采集支持投稿分页、动态游标、视频卡片分类和 BV 级去重；YouTube 使用公开 Atom Feed，标准频道 URL 直接使用 Channel ID，`@handle` 通过频道页面解析真实 ID。
 5. 报告新增“创作者动态追踪”一级章节，失败状态显示为不完整，不把失败伪装成“今日暂无更新”；原有 GitHub、RSS、Web Search 章节和推荐历史保持原语义。
-6. Hermes Skill 增加自然语言账号管理路由和显式 CLI 示例，授权身份由稳定的 `owner_key`/本地授权表校验，不读取或保存完整聊天记录。
+6. Hermes Skill 增加自然语言账号管理路由和显式 CLI 示例，授权身份由当前私聊的稳定 `owner_key`/本地授权表校验；授权表为空时只允许首个 sender 原子登记，不读取或保存完整聊天记录。
 
 ## 5. 主要风险与验证边界
 
@@ -77,7 +77,7 @@ report         → RecommendationEngine → DailyReportRenderer → reports/*.md
 - `daily_intelligence/collectors/creators.py` 提供标准库 HTTP 客户端、有限重试/退避、Bilibili WBI、投稿分页、动态游标、YouTube Atom Feed 和统一 `CreatorUpdate`。
 - `daily_intelligence/creator_service.py` 提供授权账号 CRUD、首次 24 小时/新账号窗口、来源失败隔离、事件幂等保存和报告成功后最终化。
 - `daily_intelligence/cli.py` 在既有 `report` 入口中固定本次 `window_end`，增加 `creator` 管理命令；`daily_intelligence/report.py` 追加创作者动态章节，不改变原有板块和 QQ 拆分边界。
-- `.env.example`、README、Hermes Skill、部署说明和 CHANGELOG 补充 owner 白名单、Bilibili Cookie、自然语言管理和验证边界。
+- `.env.example`、README、Hermes Skill、部署说明和 CHANGELOG 补充首次私聊 owner 登记、可选白名单、Bilibili Cookie、自然语言管理和验证边界。
 
 ## 7. 时间窗口与检查点
 
@@ -94,7 +94,7 @@ report         → RecommendationEngine → DailyReportRenderer → reports/*.md
 
 ## 9. 手动配置与验收
 
-1. 在项目 `.env` 配置 `CREATOR_ADMIN_KEYS`，如需省略参数再配置 `CREATOR_OWNER_KEY`；Bilibili 动态接口被风控时再配置本地 `BILIBILI_COOKIE`。
-2. 通过 Hermes 当前真实入站上下文传入稳定 owner，使用自然语言添加主页链接；先用 `creator list` 检查账号状态，再触发一次现有日报任务。
+1. 默认无需配置 `CREATOR_ADMIN_KEYS` 或 `CREATOR_OWNER_KEY`；首次创作者管理私聊由 Hermes 传入真实 sender ID，系统会自动登记首个 owner。需要预置或多个管理员时再配置 `CREATOR_ADMIN_KEYS`，本地 CLI 省略参数时再配置 `CREATOR_OWNER_KEY`；Bilibili 动态接口被风控时再配置本地 `BILIBILI_COOKIE`。
+2. 通过 Hermes 当前真实入站上下文传入 sender ID，使用自然语言添加主页链接；先用 `creator list` 检查账号状态，再触发一次现有日报任务。
 3. 检查 `reports/YYYY-MM-DD.md`、`reports/YYYY-MM-DD.qq.md` 的“创作者动态追踪”、SQLite `creator_source_runs` 和 `creator_checkpoints`；失败时确认板块显示“采集失败，无法确认今日更新”。
 4. 真实平台、Cron、QQ 被动回复、QQ 主动投递和媒体上传仍按 `deployment/HERMES_INSTALL.md` 分层验收；本次没有重启 Gateway、修改 Cron 或发送真实 QQ 消息。

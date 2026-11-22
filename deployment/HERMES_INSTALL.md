@@ -63,16 +63,18 @@ if (-not (Test-Path ".env")) {
 
 GitHub API 专用代理通过项目 `.env` 的 `GITHUB_PROXY` 配置，例如 `GITHUB_PROXY=http://127.0.0.1:7890`。进程级 `GITHUB_PROXY` 优先于项目文件；未配置时才使用 Python 自动代理发现。该配置只作用于 GitHubClient，不会修改 Hermes、Windows 系统代理或 RSS 客户端。显式代理不可用或被 `NO_PROXY` 绕过时，命令会明确失败。
 
-创作者账号管理需要在项目 `.env` 中配置授权 owner 白名单：
+创作者账号管理可以直接使用首次私聊自动登记的 sender ID；只有需要预置或配置多个管理员时，才在项目 `.env` 中填写授权白名单：
 
 ~~~~dotenv
-CREATOR_ADMIN_KEYS=qq:user-123
-CREATOR_OWNER_KEY=qq:user-123
+# 可选：预置或追加多个稳定 sender ID，逗号分隔
+CREATOR_ADMIN_KEYS=
+# 可选：本地 CLI 省略 --owner-key 时使用；Hermes 应传入当前私聊 sender ID
+CREATOR_OWNER_KEY=
 # Bilibili 动态接口需要时再填写，不能提交真实 Cookie
 BILIBILI_COOKIE=
 ~~~~
 
-`CREATOR_ADMIN_KEYS` 只保存稳定 owner 标识，不保存完整 QQ 消息；`BILIBILI_COOKIE` 只由 Python 进程读取，不进入数据库、日志或日报。
+首次创作者管理请求会把 Hermes 传入的当前私聊 sender ID 原子写入 SQLite；之后其他 sender 不能抢占 owner。`CREATOR_ADMIN_KEYS` 只保存稳定 sender ID，不保存完整 QQ 消息；`BILIBILI_COOKIE` 只由 Python 进程读取，不进入数据库、日志或日报。
 
 ## 4. Skills 源文件和安装目标发现
 
@@ -169,7 +171,7 @@ hermes cron list
 
 如果目标环境的入站消息不能交给 Hermes，先检查 Hermes qqbot 平台和 Profile toolset；不要在本项目内重写 QQ 路由。
 
-账号管理由同一个本地 Skill 路由到 `creator` CLI。自然语言意图包括“添加这个 UP 主/频道”“查看监控账号”“删除/暂停/恢复账号”和“只监控视频/动态”；Skill 必须传入已授权的稳定 owner key。支持一次消息中的多个主页链接，Bilibili 默认视频与动态均开启，YouTube 仅视频。账号管理不会创建新的定时任务，也不会发送实时通知。
+账号管理由同一个本地 Skill 路由到 `creator` CLI。自然语言意图包括“添加这个 UP 主/频道”“查看监控账号”“删除/暂停/恢复账号”和“只监控视频/动态”；Skill 必须从当前私聊入站上下文传入真实 sender ID，不能让用户在文本中自报 owner。没有预置授权时，该 ID 会在首次管理请求时自动登记。支持一次消息中的多个主页链接，Bilibili 默认视频与动态均开启，YouTube 仅视频。账号管理不会创建新的定时任务，也不会发送实时通知。
 
 腾讯 QQ 开放平台官方文档列出的消息类型包括文本、Markdown 和媒体；接口的主动推送、Markdown 模板审批、URL 白名单、媒体上传和频率限制必须按目标机器人和 Hermes adapter 的实际配置验证，不能只凭本地文件生成成功来宣称已打通。参考：[QQ 官方消息发送与接收文档](https://github.com/tencent-connect/bot-docs/blob/main/docs/develop/api-v2/server-inter/message/send-receive/send.md)。本项目当前只完成：
 

@@ -41,15 +41,15 @@ metadata:
 用户可以使用自然语言表达添加、查看、删除、暂停、恢复和修改监控类型的意图。Skill 将消息中的主页链接和稳定发送者 owner 映射为以下本地命令；不要要求用户维护 YAML 或手写 UID：
 
 ~~~~powershell
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator add --owner-key <authorized-owner> <URL> [<URL> ...]
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator list --owner-key <authorized-owner>
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator pause <bilibili|youtube> <account-key> --owner-key <authorized-owner>
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator resume <bilibili|youtube> <account-key> --owner-key <authorized-owner>
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator configure <bilibili|youtube> <account-key> --owner-key <authorized-owner> [--no-videos] [--no-dynamics]
-python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator remove <bilibili|youtube> <account-key> --owner-key <authorized-owner>
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator add --owner-key <private-sender-id> <URL> [<URL> ...]
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator list --owner-key <private-sender-id>
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator pause <bilibili|youtube> <account-key> --owner-key <private-sender-id>
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator resume <bilibili|youtube> <account-key> --owner-key <private-sender-id>
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator configure <bilibili|youtube> <account-key> --owner-key <private-sender-id> [--no-videos] [--no-dynamics]
+python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" creator remove <bilibili|youtube> <account-key> --owner-key <private-sender-id>
 ~~~~
 
-`CREATOR_ADMIN_KEYS` 必须在本机 `.env` 中预先配置，`owner-key` 不能直接信任用户文本。Bilibili 默认启用视频和动态，YouTube 只启用视频；直播、YouTube 社区帖子和实时通知都不在范围内。用户只发送链接且没有添加意图时，先询问一次是否添加。
+`owner-key` 必须由 Hermes 从当前私聊入站上下文注入，不能直接信任用户文本。没有 `CREATOR_ADMIN_KEYS` 时，首次创作者管理请求会自动登记该 sender ID；有预置白名单时只允许白名单中的 sender。Bilibili 默认启用视频和动态，YouTube 只启用视频；直播、YouTube 社区帖子和实时通知都不在范围内。用户只发送链接且没有添加意图时，先询问一次是否添加。
 
 ## Hermes Web Search 交接
 

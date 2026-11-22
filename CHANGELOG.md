@@ -8,6 +8,7 @@
 - Bilibili 投稿分页、WBI 签名、空间动态游标、文字/图片/转发/专栏分类和 BV/Dynamic ID 去重。
 - YouTube 公开 Atom Feed、`/channel/UC...`、`/@handle` 与旧式频道页解析，不依赖 Data API Key。
 - `creator add/list/pause/resume/configure/remove` CLI 与 `daily-intelligence-local` Skill 的自然语言管理路由。
+- 没有预置授权时首次私聊 sender 自动原子登记为首个 creator owner；`CREATOR_ADMIN_KEYS` 与 `CREATOR_OWNER_KEY` 保留为可选兼容配置。
 - 日报“创作者动态追踪”章节、QQ Markdown 同步渲染、失败状态和报告成功后检查点推进。
 
 ### Verification boundary

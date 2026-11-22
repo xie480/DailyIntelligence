@@ -79,6 +79,8 @@ flowchart TD
 
 保存平台、账号唯一键、显示名称、状态、视频/动态监控开关和授权 owner。`UNIQUE(platform, account_key)` 防止同平台账号重复添加，YouTube 不允许动态开关。
 
+Hermes 只把当前私聊上下文中的真实 sender ID 传给 CLI。授权表为空时，首次管理请求通过单条 SQLite 条件插入原子登记首个 owner；后续 sender 必须已经在授权表中，`CREATOR_ADMIN_KEYS` 仅用于可选预置或追加管理员。
+
 ### creator_checkpoints / creator_source_runs
 
 按账号和内容类型保存首次窗口起点、最近成功截止点、失败状态和错误；来源运行记录保存本次窗口、事件数量和失败原因。任何来源失败都不会推进 `last_success_end`。
