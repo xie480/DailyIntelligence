@@ -56,6 +56,8 @@ if (-not (Test-Path ".env")) {
 
 项目当前进程中的 `GITHUB_TOKEN` 仍优先于 `.env`；没有 Token 时使用匿名公开 API。不要把真实 Token 写入 PowerShell 历史、sources.json、日报或日志。Hermes 只负责调度，不需要向 Python 子进程传递 Token。
 
+GitHub API 专用代理通过项目 `.env` 的 `GITHUB_PROXY` 配置，例如 `GITHUB_PROXY=http://127.0.0.1:7890`。进程级 `GITHUB_PROXY` 优先于项目文件；未配置时才使用 Python 自动代理发现。该配置只作用于 GitHubClient，不会修改 Hermes、Windows 系统代理或 RSS 客户端。显式代理不可用或被 `NO_PROXY` 绕过时，命令会明确失败。
+
 ## 4. Skills 源文件和安装目标发现
 
 项目源文件在：

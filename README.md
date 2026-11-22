@@ -90,7 +90,9 @@ python -m daily_intelligence --data-dir "E:\HermesData\daily-intelligence" --tim
 - reports/YYYY-MM-DD.md：每日日报。
 - logs/daily-intelligence.log：CLI 运行日志。
 
-GitHub Token 是可选的。项目根目录的 `.env` 用作本项目独立的凭证入口，文件只需包含 `GITHUB_TOKEN=`，实际值由本机用户填写。`.env` 已被 Git 忽略，`.env.example` 只提供空模板，不要把真实 Token 发到聊天窗口或写入源码、JSON 模板、日报和日志。当前进程已有的 `GITHUB_TOKEN` 优先于项目 `.env`；两处都没有 Token 时继续使用公开 API，并提示配额较低。
+GitHub Token 是可选的。项目根目录的 `.env` 用作本项目独立的凭证入口，实际值由本机用户填写。`.env` 已被 Git 忽略，不要把真实 Token 发到聊天窗口或写入源码、JSON 模板、日报和日志。当前进程已有的 `GITHUB_TOKEN` 优先于项目 `.env`；两处都没有 Token 时继续使用公开 API，并提示配额较低。
+
+GitHub 专用代理使用 `GITHUB_PROXY` 配置，优先级为进程级 `GITHUB_PROXY`、项目 `.env` 中的 `GITHUB_PROXY`、Python 自动代理发现。显式代理会同时用于 GitHub API 的 HTTP/HTTPS 请求，并覆盖 `HTTP_PROXY`、`HTTPS_PROXY` 和 `ALL_PROXY`；显式配置无效或与 `NO_PROXY` 冲突时直接报错，不会静默直连。`.env.example` 使用 `http://127.0.0.1:7890` 作为示例地址，需按本机代理客户端实际监听地址调整。
 
 配置模块根据源码位置解析项目根目录，不依赖当前工作目录、Hermes Gateway 环境继承或 GitHub CLI。GitHub API 的 Token 只在进程运行时由统一配置模块读取，请求固定使用 `https://api.github.com`、`Accept: application/vnd.github+json`、`X-GitHub-Api-Version: 2022-11-28` 和 `User-Agent: DailyIntelligence`；Token 只放在 `Authorization: Bearer ...` 请求头中，不进入 URL、数据库或缓存。客户端拒绝非 HTTPS、非 `api.github.com` 地址和重定向，并把错误中的 Token 清理后再交给 CLI。401 会提示 Token 无效或已过期，403/429 按限流响应头和有限指数退避处理。
 
