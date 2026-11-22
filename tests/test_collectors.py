@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import socket
@@ -295,6 +296,159 @@ class CollectorTestCase(unittest.TestCase):
                 for request in opener.requests
             )
         )
+
+    def test_github_collector_reads_readme_and_keeps_complete_metadata(self) -> None:
+        """入选项目应解析 README 并保留完整仓库和 Release 元数据。"""
+        readme = """# Demo Agent
+
+        ## Features
+        - Local workflow
+        - MCP support
+        """
+        opener = FakeOpener(
+            {
+                "/search/repositories": json.dumps(
+                    {
+                        "items": [
+                            {
+                                "id": 43,
+                                "full_name": "acme/readme-demo",
+                                "name": "readme-demo",
+                                "html_url": "https://github.com/acme/readme-demo",
+                                "homepage": "https://demo.example.com",
+                                "description": "Short description",
+                                "language": "Python",
+                                "topics": ["agent", "mcp"],
+                                "stargazers_count": 321,
+                                "forks_count": 32,
+                                "watchers_count": 20,
+                                "open_issues_count": 4,
+                                "created_at": "2026-11-01T00:00:00Z",
+                                "updated_at": "2026-11-21T00:00:00Z",
+                                "pushed_at": "2026-11-21T01:00:00Z",
+                                "license": {"spdx_id": "MIT"},
+                            }
+                        ]
+                    }
+                ).encode(),
+                "/releases/latest": json.dumps(
+                    {
+                        "tag_name": "v1.2.0",
+                        "html_url": "https://github.com/acme/readme-demo/releases/tag/v1.2.0",
+                        "published_at": "2026-11-20T00:00:00Z",
+                    }
+                ).encode(),
+                "/readme": json.dumps(
+                    {
+                        "content": base64.b64encode(
+                            readme.encode()
+                        ).decode(),
+                        "encoding": "base64",
+                        "html_url": "https://github.com/acme/readme-demo/blob/main/README.md",
+                        "download_url": "https://raw.githubusercontent.com/acme/readme-demo/main/README.md",
+                    }
+                ).encode(),
+            }
+        )
+        items = GitHubCollector(
+            GitHubClient(
+                opener=opener,
+                sleep_fn=lambda seconds: None,
+            )
+        ).collect(
+            queries=[
+                {
+                    "name": "Agent",
+                    "query": "topic:agent",
+                    "section": "github_hot",
+                }
+            ],
+            per_page=5,
+            enrich_readme=True,
+            readme_limit=1,
+        )
+
+        self.assertEqual(len(items), 1)
+        metadata = items[0].metadata
+        self.assertEqual(metadata["homepage"], "https://demo.example.com")
+        self.assertEqual(metadata["watchers_count"], 20)
+        self.assertEqual(metadata["open_issues_count"], 4)
+        self.assertEqual(metadata["latest_release"]["tag"], "v1.2.0")
+        self.assertEqual(
+            metadata["readme"]["content"],
+            readme.strip(),
+        )
+        self.assertEqual(
+            metadata["readme"]["html_url"],
+            "https://github.com/acme/readme-demo/blob/main/README.md",
+        )
+
+    def test_github_collector_limits_readme_requests_to_selected_projects(self) -> None:
+        """README 请求数量应受最终入选项目上限控制。"""
+        repositories = [
+            {
+                "id": 50 + index,
+                "full_name": f"acme/{['alpha', 'beta', 'gamma'][index]}",
+                "name": ['alpha', 'beta', 'gamma'][index],
+                "html_url": f"https://github.com/acme/{['alpha', 'beta', 'gamma'][index]}",
+                "description": [
+                    "A local terminal agent runtime",
+                    "A visual workflow compiler",
+                    "A distributed tool registry",
+                ][index],
+                "language": "Python",
+                "stargazers_count": 100 - index,
+                "forks_count": 10,
+                "created_at": "2026-11-01T00:00:00Z",
+                "updated_at": "2026-11-21T00:00:00Z",
+                "pushed_at": "2026-11-21T01:00:00Z",
+            }
+            for index in range(3)
+        ]
+        opener = FakeOpener(
+            {
+                "/search/repositories": json.dumps(
+                    {"items": repositories}
+                ).encode(),
+                "/readme": json.dumps(
+                    {
+                        "content": base64.b64encode(
+                            b"# Project"
+                        ).decode(),
+                        "encoding": "base64",
+                    }
+                ).encode(),
+            }
+        )
+
+        items = GitHubCollector(
+            GitHubClient(
+                opener=opener,
+                sleep_fn=lambda seconds: None,
+            )
+        ).collect(
+            queries=[
+                {
+                    "name": "Agent",
+                    "query": "topic:agent",
+                    "section": "github_hot",
+                }
+            ],
+            per_page=5,
+            include_releases=False,
+            enrich_readme=True,
+            readme_limit=1,
+        )
+
+        self.assertEqual(len(items), 3)
+        readme_requests = [
+            request
+            for request in opener.requests
+            if "/readme" in request.full_url
+        ]
+        self.assertEqual(len(readme_requests), 1)
+        self.assertIn("readme", items[0].metadata)
+        self.assertNotIn("readme", items[1].metadata)
 
     def test_rss_collector_parses_recent_rss_and_atom(self) -> None:
         """RSS 和 Atom 条目应解析标题、链接、摘要及时间。"""

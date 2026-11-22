@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 import socket
@@ -39,6 +41,8 @@ DEFAULT_MAX_RETRIES = 2
 DEFAULT_MAX_WAIT_SECONDS = 30.0
 DEFAULT_ETAG_CACHE_SIZE = 128
 MAX_RETRIES_HARD_LIMIT = 5
+README_MAX_CHARS = 12000
+DEFAULT_README_LIMIT = 15
 
 
 def _redact_text(
@@ -1027,8 +1031,10 @@ class GitHubCollector:
         queries: Iterable[dict[str, Any]] | None = None,
         per_page: int = 20,
         include_releases: bool = True,
+        enrich_readme: bool = False,
+        readme_limit: int = DEFAULT_README_LIMIT,
     ) -> list[Item]:
-        """执行查询并把仓库结果转换为去重后的项目列表。"""
+        """执行查询、去重并按上限补充入选项目的 README。"""
         query_list = list(
             queries
             or [
@@ -1065,7 +1071,145 @@ class GitHubCollector:
                 )
                 if item:
                     collected.append(item)
-        return deduplicate_items(collected)
+        unique_items = deduplicate_items(collected)
+        if not enrich_readme:
+            return unique_items
+        return self._enrich_readmes(
+            unique_items,
+            readme_limit=readme_limit,
+        )
+
+    def _enrich_readmes(
+        self,
+        items: list[Item],
+        readme_limit: int,
+    ) -> list[Item]:
+        """只为有限数量的最终候选项目请求 README，避免浪费 API 配额。"""
+        limit = max(
+            0,
+            int(readme_limit),
+        )
+        if limit == 0:
+            return items
+        selected_indexes = sorted(
+            range(len(items)),
+            key=lambda index: self._candidate_score(items[index]),
+            reverse=True,
+        )[:limit]
+        selected = set(selected_indexes)
+        enriched: list[Item] = []
+        for index, item in enumerate(items):
+            if index not in selected:
+                enriched.append(item)
+                continue
+            enriched.append(
+                self._enrich_item_with_readme(item)
+            )
+        return enriched
+
+    def _enrich_item_with_readme(
+        self,
+        item: Item,
+    ) -> Item:
+        """读取单个仓库 README，并把解析结果写入 metadata。"""
+        repo_name = item.repo_full_name
+        if not repo_name:
+            return item
+        metadata = dict(item.metadata)
+        try:
+            payload = self.client.get_json(
+                f"/repos/{repo_name}/readme"
+            )
+        except HTTPError as error:
+            metadata["readme"] = {
+                "status": "missing"
+                if error.code == 404
+                else "failed",
+                "error_type": type(error).__name__,
+            }
+            return item.with_updates(
+                metadata=metadata,
+            )
+        except Exception as error:
+            metadata["readme"] = {
+                "status": "failed",
+                "error_type": type(error).__name__,
+            }
+            return item.with_updates(
+                metadata=metadata,
+            )
+
+        readme = self._parse_readme_payload(payload)
+        metadata["readme"] = readme
+        return item.with_updates(
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _candidate_score(
+        item: Item,
+    ) -> tuple[int, int, str]:
+        """用可解释字段选择 README 候选，不把分数写入业务数据。"""
+        metadata = item.metadata
+        section_priority = 1 if metadata.get("section") == "github_hot" else 0
+        stars = int(item.stars or 0)
+        pushed_at = str(metadata.get("pushed_at") or "")
+        return (
+            section_priority,
+            stars,
+            pushed_at,
+        )
+
+    @staticmethod
+    def _parse_readme_payload(
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """解析 GitHub README Base64 响应并保留可追溯链接。"""
+        raw_content = payload.get("content")
+        if not isinstance(raw_content, str) or not raw_content.strip():
+            return {
+                "status": "unparseable",
+                "error_type": "missing_content",
+            }
+        encoding = str(
+            payload.get("encoding") or "base64"
+        ).casefold()
+        try:
+            if encoding == "base64":
+                decoded = base64.b64decode(
+                    "".join(raw_content.split()),
+                    validate=False,
+                ).decode(
+                    "utf-8",
+                    errors="replace",
+                )
+            else:
+                decoded = raw_content
+        except (
+            binascii.Error,
+            UnicodeError,
+            ValueError,
+        ):
+            return {
+                "status": "unparseable",
+                "error_type": "invalid_encoding",
+            }
+        cleaned = _clean_readme_text(decoded)
+        if not cleaned:
+            return {
+                "status": "unparseable",
+                "error_type": "empty_content",
+            }
+        truncated = len(cleaned) > README_MAX_CHARS
+        if truncated:
+            cleaned = cleaned[:README_MAX_CHARS].rstrip()
+        return {
+            "status": "success",
+            "content": cleaned,
+            "truncated": truncated,
+            "html_url": payload.get("html_url"),
+            "download_url": payload.get("download_url"),
+        }
 
     @staticmethod
     def parse_trending_html(
@@ -1165,8 +1309,20 @@ class GitHubCollector:
         license_info = repository.get("license") or {}
         metadata: dict[str, Any] = {
             "query_name": query_name,
+            "name": repository.get("name") or full_name.rsplit(
+                "/",
+                1,
+            )[-1],
+            "repository_url": html_url,
+            "homepage": repository.get("homepage"),
             "topics": repository.get("topics") or [],
             "license": license_info.get("spdx_id") or license_info.get("name"),
+            "open_issues_count": int(
+                repository.get("open_issues_count") or 0
+            ),
+            "watchers_count": int(
+                repository.get("watchers_count") or 0
+            ),
             "created_at": repository.get("created_at"),
             "updated_at": repository.get("updated_at"),
             "pushed_at": repository.get("pushed_at"),
@@ -1223,6 +1379,35 @@ class GitHubCollector:
             timezone_name,
             now,
         ).isoformat()
+
+
+def _clean_readme_text(
+    value: str,
+) -> str:
+    """清理 README 控制字符并保留标题、列表和段落结构。"""
+    lines = []
+    blank_count = 0
+    for raw_line in value.replace(
+        "\r\n",
+        "\n",
+    ).replace(
+        "\r",
+        "\n",
+    ).split(
+        "\n"
+    ):
+        line = raw_line.replace(
+            "\x00",
+            "",
+        ).rstrip()
+        if not line.strip():
+            blank_count += 1
+            if blank_count <= 2:
+                lines.append("")
+            continue
+        blank_count = 0
+        lines.append(line)
+    return "\n".join(lines).strip()
 
 
 def _parse_stat(

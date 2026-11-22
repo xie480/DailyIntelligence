@@ -2,6 +2,8 @@
   "github": {
     "per_page": 20,
     "include_releases": true,
+    "include_readme": true,
+    "readme_limit": 15,
     "queries": [
       {
         "name": "AI Agent",

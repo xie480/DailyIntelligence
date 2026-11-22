@@ -33,6 +33,8 @@ DEFAULT_SOURCES = {
     "github": {
         "per_page": 20,
         "include_releases": True,
+        "include_readme": True,
+        "readme_limit": 15,
         "queries": [
             {
                 "name": "AI Agent",
@@ -459,6 +461,8 @@ def _collect_github(
             per_page=int(config.get("per_page") or 20),
             include_releases=not args.no_releases
             and bool(config.get("include_releases", True)),
+            enrich_readme=bool(config.get("include_readme", True)),
+            readme_limit=int(config.get("readme_limit") or 15),
         )
         snapshot_date = GitHubCollector.snapshot_date(
             args.timezone,
