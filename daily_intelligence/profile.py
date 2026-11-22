@@ -190,11 +190,21 @@ class InterestProfileStore:
             "不要再推荐" in normalized_command
             or "不推荐" in normalized_command
             or "不喜欢" in normalized_command
+            or "不感兴趣" in normalized_command
         ):
             action = "exclude_project"
             if clean_target not in profile["excluded_projects"]:
                 profile["excluded_projects"].append(clean_target)
             message = f"已排除项目 {clean_target}"
+        elif clean_target and (
+            "想深入了解" in normalized_command
+            or "深入了解" in normalized_command
+            or "进一步了解" in normalized_command
+        ):
+            action = "deep_dive"
+            if clean_target not in profile["favorite_projects"]:
+                profile["favorite_projects"].append(clean_target)
+            message = f"已记录深入了解项目 {clean_target}"
         elif "喜欢" in normalized_command or "有意思" in normalized_command:
             action = "like"
             if clean_target and clean_target not in profile["favorite_projects"]:
@@ -244,6 +254,20 @@ class InterestProfileStore:
                 excluded_topic = "普通 AI 套壳项目"
                 if excluded_topic not in profile["excluded_topics"]:
                     profile["excluded_topics"].append(excluded_topic)
+        elif "不感兴趣" in normalized_command:
+            topic = self._extract_topic(
+                normalized_command,
+                (
+                    "不感兴趣",
+                ),
+            )
+            key = self._resolve_interest_key(
+                profile,
+                topic,
+            )
+            changes[key] = -WEIGHT_STEP
+            action = "decrease_interest"
+            message = f"已降低 {key} 的兴趣权重"
         for key, delta in changes.items():
             profile["interests"][key] = _clamp(
                 profile["interests"].get(key, 50) + delta,
@@ -269,6 +293,62 @@ class InterestProfileStore:
             changes=changes,
             target=clean_target,
             message=message,
+        )
+
+    def record_query(
+        self,
+        topic: str,
+    ) -> FeedbackResult:
+        """记录用户主动查询的主题，不保存完整聊天内容。"""
+        normalized_topic = topic.strip()
+        if not normalized_topic:
+            raise ValueError("查询主题不能为空")
+        profile = self.load()
+        key = self._resolve_interest_key(
+            profile,
+            normalized_topic,
+        )
+        query_signals = profile["query_signals"]
+        count = int(query_signals.get(key, 0)) + 1
+        query_signals[key] = count
+        adjustment = 0
+        if count >= IMPLICIT_SIGNAL_THRESHOLD and (
+            count % IMPLICIT_SIGNAL_THRESHOLD == 0
+        ):
+            adjustment = 2
+            profile["interests"][key] = _clamp(
+                profile["interests"].get(key, 50) + adjustment,
+            )
+            self._append_evidence(
+                profile,
+                "query_signal",
+                f"主动查询主题：{key}",
+                {
+                    key: adjustment,
+                },
+            )
+        self.save(profile)
+        self.database.save_feedback(
+            action="query",
+            target=key,
+            note=normalized_topic[:MAX_EVIDENCE_LENGTH],
+            signal={
+                "topic": key,
+                "count": count,
+                "adjustment": adjustment,
+            },
+        )
+        return FeedbackResult(
+            action="query",
+            changes=(
+                {
+                    key: adjustment,
+                }
+                if adjustment
+                else {}
+            ),
+            target=key,
+            message=f"已记录查询主题 {key}",
         )
 
     def record_implicit_signal(
@@ -323,6 +403,7 @@ class InterestProfileStore:
             "excluded_topics": [],
         "favorite_projects": [],
             "implicit_signals": {},
+            "query_signals": {},
             "evidence": [],
             "updated_at": now_iso(),
         }
@@ -360,6 +441,9 @@ class InterestProfileStore:
             ),
             "implicit_signals": _int_map(
                 raw.get("implicit_signals")
+            ),
+            "query_signals": _int_map(
+                raw.get("query_signals")
             ),
             "evidence": (
                 raw.get("evidence")

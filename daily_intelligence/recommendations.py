@@ -13,6 +13,8 @@ from .profile import InterestProfileStore
 
 RECOMMENDATION_COOLDOWN_DAYS = 30
 SIGNIFICANT_STAR_GROWTH = 100
+EXPLORATION_IMPORTANCE_THRESHOLD = 85
+EXPLORATION_MIN_LIMIT = 2
 
 
 class RecommendationEngine:
@@ -78,6 +80,11 @@ class RecommendationEngine:
                 matched_interests,
                 item,
             )
+            result["_matched_interests"] = matched_interests
+            result["is_exploration"] = self._is_exploration_candidate(
+                item,
+                matched_interests,
+            )
             results.append(result)
         results.sort(
             key=lambda item: (
@@ -86,6 +93,16 @@ class RecommendationEngine:
             )
         )
         selected = results[: max(0, limit)]
+        self._reserve_exploration_slot(
+            selected,
+            results,
+            limit,
+        )
+        for item in selected:
+            item.pop(
+                "_matched_interests",
+                None,
+            )
         if record:
             self.record_recommendations(selected)
         return selected
@@ -209,6 +226,20 @@ class RecommendationEngine:
                     int(item["stars"]) + 1
                 ) * 2,
             )
+        importance = _numeric_score(
+            metadata.get("importance")
+        )
+        score += min(
+            18.0,
+            importance * 0.18,
+        )
+        if metadata.get("source_verified"):
+            score += 4.0
+        project_analysis = metadata.get("project_analysis")
+        if isinstance(project_analysis, dict) and project_analysis.get(
+            "evidence_urls"
+        ):
+            score += 3.0
         repo_name = str(
             item.get("repo_full_name")
             or ""
@@ -231,6 +262,46 @@ class RecommendationEngine:
         if "official" in source:
             score += 5.0
         return score, matched
+
+    def _reserve_exploration_slot(
+        self,
+        selected: list[dict[str, Any]],
+        results: list[dict[str, Any]],
+        limit: int,
+    ) -> None:
+        """在足够大的推荐列表中保留一个高重要性的新领域条目。"""
+        if limit < EXPLORATION_MIN_LIMIT or not selected:
+            return
+        if any(
+            item.get("is_exploration")
+            for item in selected
+        ):
+            return
+        candidate = next(
+            (
+                item
+                for item in results
+                if item.get("is_exploration")
+                and item not in selected
+            ),
+            None,
+        )
+        if candidate is None:
+            return
+        selected[-1] = candidate
+
+    @staticmethod
+    def _is_exploration_candidate(
+        item: dict[str, Any],
+        matched_interests: list[str],
+    ) -> bool:
+        """判断项目是否值得作为跨领域探索内容曝光。"""
+        if matched_interests:
+            return False
+        importance = _numeric_score(
+            (item.get("metadata") or {}).get("importance")
+        )
+        return importance >= EXPLORATION_IMPORTANCE_THRESHOLD
 
     @staticmethod
     def _is_excluded(
@@ -308,6 +379,13 @@ class RecommendationEngine:
             return "匹配兴趣：" + "、".join(
                 matched_interests[:4]
             )
+        importance = _numeric_score(
+            (item.get("metadata") or {}).get("importance")
+        )
+        if importance >= EXPLORATION_IMPORTANCE_THRESHOLD:
+            return "技术重要性较高，保留跨领域探索机会"
+        if (item.get("metadata") or {}).get("source_verified"):
+            return "来源已核实，适合作为补充阅读"
         return "来源和更新时间较新，适合作为补充阅读"
 
     @staticmethod
@@ -338,4 +416,23 @@ class RecommendationEngine:
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
+
+
+def _numeric_score(
+    value: Any,
+) -> float:
+    """把重要性等外部数值限制在 0 到 100。"""
+    try:
+        return max(
+            0.0,
+            min(
+                100.0,
+                float(value or 0),
+            ),
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return 0.0
 

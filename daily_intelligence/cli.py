@@ -212,6 +212,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="反馈所指向的项目或仓库",
     )
 
+    query_parser = subparsers.add_parser(
+        "query",
+        help="记录一次用户主动查询的主题",
+    )
+    _add_runtime_overrides(query_parser)
+    query_parser.add_argument(
+        "query_topic",
+        help="查询主题，例如 MCP、Agent 或软件供应链安全",
+    )
+
     profile_parser = subparsers.add_parser(
         "profile",
         help="查看、关闭、开启或重置兴趣画像",
@@ -305,6 +315,7 @@ def _dispatch(
         "import-handoff": _import_handoff,
         "recommend": _recommend,
         "feedback": _feedback,
+        "query": _query,
         "profile": _profile,
         "report": _report,
         "dry-run": _dry_run,
@@ -705,6 +716,21 @@ def _feedback(
         result = profile.apply_feedback(
             args.feedback_text,
             target=args.target,
+        )
+        print(result.message)
+        return 0
+    finally:
+        database.close()
+
+
+def _query(
+    args: argparse.Namespace,
+) -> int:
+    """记录一次主动查询主题并更新长期画像信号。"""
+    _, database, profile = _runtime(args)
+    try:
+        result = profile.record_query(
+            args.query_topic,
         )
         print(result.message)
         return 0

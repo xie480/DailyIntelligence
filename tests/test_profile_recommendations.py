@@ -90,6 +90,76 @@ class ProfileRecommendationTestCase(unittest.TestCase):
             restored["favorite_projects"],
         )
 
+    def test_negative_feedback_and_deep_dive_are_structured(self) -> None:
+        """不感兴趣和深入了解应落为可影响推荐的结构化反馈。"""
+        negative = self.profile.apply_feedback(
+            "我对这条内容不感兴趣",
+            target="acme/noisy-project",
+        )
+        self.assertEqual(
+            negative.action,
+            "exclude_project",
+        )
+        self.assertIn(
+            "acme/noisy-project",
+            self.profile.load()["excluded_projects"],
+        )
+
+        deep_dive = self.profile.apply_feedback(
+            "我想深入了解这个项目",
+            target="acme/deep-project",
+        )
+        self.assertEqual(
+            deep_dive.action,
+            "deep_dive",
+        )
+        self.assertIn(
+            "acme/deep-project",
+            self.profile.load()["favorite_projects"],
+        )
+
+    def test_query_signal_is_structured_and_reaches_threshold(self) -> None:
+        """主动查询只保存主题和次数，重复查询才调整长期权重。"""
+        before = self.profile.load()["interests"]["MCP"]
+
+        first = self.profile.record_query("MCP")
+        self.assertEqual(
+            first.action,
+            "query",
+        )
+        self.assertEqual(
+            first.changes,
+            {},
+        )
+        self.assertEqual(
+            self.profile.load()["query_signals"]["MCP"],
+            1,
+        )
+        self.profile.record_query("MCP")
+        self.profile.record_query("MCP")
+
+        profile = self.profile.load()
+        self.assertEqual(
+            profile["query_signals"]["MCP"],
+            3,
+        )
+        self.assertGreater(
+            profile["interests"]["MCP"],
+            before,
+        )
+        feedback = self.database.list_feedback(
+            action="query",
+            limit=10,
+        )
+        self.assertEqual(
+            len(feedback),
+            3,
+        )
+        self.assertEqual(
+            feedback[0]["note"],
+            "MCP",
+        )
+
     def test_implicit_signal_requires_repeated_evidence(self) -> None:
         """一次偶然信号不应改变长期权重，重复三次才轻量调整。"""
         before = self.profile.load()["interests"]["MCP"]
@@ -229,6 +299,68 @@ class ProfileRecommendationTestCase(unittest.TestCase):
                 result["id"]
                 for result in results
             },
+        )
+
+    def test_high_importance_unmatched_item_gets_exploration_slot(self) -> None:
+        """高重要性的新领域内容应保留探索曝光机会。"""
+        for index in range(2):
+            self.database.upsert_item(
+                Item(
+                    item_type="github",
+                    title=f"acme/mcp-tool-{index}",
+                    url=f"https://github.com/acme/mcp-tool-{index}",
+                    source="GitHub Search API",
+                    summary="MCP agent developer tool",
+                    category="AI Agent",
+                    repo_full_name=f"acme/mcp-tool-{index}",
+                    stars=500,
+                    metadata={
+                        "section": "github_hot",
+                    },
+                )
+            )
+        important_id = self.database.upsert_item(
+            Item(
+                item_type="news",
+                title="Critical compiler security update",
+                url="https://example.com/compiler-security",
+                source="Official Security Bulletin",
+                summary="A major compiler security update for developers.",
+                category="software",
+                published_at="2026-11-22T08:00:00+00:00",
+                metadata={
+                    "importance": 96,
+                    "source_verified": True,
+                    "section": "software",
+                },
+            )
+        )
+
+        results = RecommendationEngine(
+            self.database,
+            self.profile,
+        ).recommend(
+            limit=2,
+            now=datetime.fromisoformat(
+                "2026-11-22T12:00:00+00:00"
+            ),
+            record=False,
+        )
+
+        self.assertIn(
+            important_id,
+            {
+                result["id"]
+                for result in results
+            },
+        )
+        important_result = next(
+            result
+            for result in results
+            if result["id"] == important_id
+        )
+        self.assertTrue(
+            important_result["is_exploration"],
         )
 
 

@@ -149,6 +149,48 @@ class CLITestCase(unittest.TestCase):
             ).is_file()
         )
 
+    def test_query_command_records_only_structured_topic_signal(self) -> None:
+        """主动查询命令应只记录主题信号，不保存聊天原文。"""
+        common = [
+            "--data-dir",
+            str(self.runtime_dir),
+        ]
+        self.assertEqual(
+            main(
+                common
+                + [
+                    "init-db",
+                ]
+            ),
+            0,
+        )
+        self.assertEqual(
+            main(
+                common
+                + [
+                    "query",
+                    "MCP",
+                ]
+            ),
+            0,
+        )
+        paths = RuntimePaths.from_data_dir(self.runtime_dir)
+        database = Database(paths.database_path)
+        database.initialize()
+        records = database.list_feedback(
+            action="query",
+            limit=10,
+        )
+        database.close()
+        self.assertEqual(
+            len(records),
+            1,
+        )
+        self.assertEqual(
+            records[0]["note"],
+            "MCP",
+        )
+
     def test_dry_run_does_not_need_network(self) -> None:
         """dry-run 应使用内置样例并输出可读日报。"""
         output = io.StringIO()
