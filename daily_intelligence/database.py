@@ -7,7 +7,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 from .config import now_iso
 from .deduplication import content_fingerprint, normalize_url
@@ -334,9 +334,12 @@ class Database:
         """写入运行结束状态和可选错误信息。"""
         if status not in {
             "success",
+            "partial",
             "failed",
         }:
-            raise ValueError("运行状态必须是 success 或 failed")
+            raise ValueError(
+                "运行状态必须是 success、partial 或 failed"
+            )
         with self.transaction():
             self.connection.execute(
                 """
@@ -421,26 +424,61 @@ class Database:
     ) -> int:
         """保存结构化用户反馈或推荐历史并返回记录 ID。"""
         with self.transaction():
-            cursor = self.connection.execute(
-                """
-                INSERT INTO feedback(
-                    action, target, item_id, note, signal_json, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    action,
-                    target,
-                    item_id,
-                    note,
-                    json.dumps(
-                        signal or {},
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    ),
-                    now_iso(),
-                ),
+            return self._insert_feedback(
+                action=action,
+                target=target,
+                item_id=item_id,
+                note=note,
+                signal=signal,
             )
+
+    def save_feedback_batch(
+        self,
+        records: Iterable[dict[str, Any]],
+    ) -> int:
+        """在一个事务中保存多条反馈，失败时整体回滚。"""
+        saved = 0
+        with self.transaction():
+            for record in records:
+                self._insert_feedback(
+                    action=str(record.get("action") or ""),
+                    target=str(record.get("target") or ""),
+                    item_id=record.get("item_id"),
+                    note=str(record.get("note") or ""),
+                    signal=record.get("signal"),
+                )
+                saved += 1
+        return saved
+
+    def _insert_feedback(
+        self,
+        action: str,
+        target: str,
+        item_id: int | None,
+        note: str,
+        signal: dict[str, Any] | None,
+    ) -> int:
+        """向当前事务写入单条反馈，不单独提交事务。"""
+        cursor = self.connection.execute(
+            """
+            INSERT INTO feedback(
+                action, target, item_id, note, signal_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                action,
+                target,
+                item_id,
+                note,
+                json.dumps(
+                    signal or {},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                now_iso(),
+            ),
+        )
         return int(cursor.lastrowid)
 
     def list_feedback(

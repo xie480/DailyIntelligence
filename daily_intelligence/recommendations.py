@@ -103,6 +103,7 @@ class RecommendationEngine:
         )
         recorded = 0
         seen_item_ids: set[int] = set()
+        pending: list[dict[str, Any]] = []
         for item in items:
             item_id = int(item["id"])
             if item_id in seen_item_ids:
@@ -122,16 +123,21 @@ class RecommendationEngine:
             }
             if report_date_value is not None:
                 signal["report_date"] = report_date_value
-            self.database.save_feedback(
-                action="recommended",
-                target=item.get("repo_full_name")
-                or item.get("url")
-                or "",
-                item_id=item_id,
-                note=item["match_reason"],
-                signal=signal,
+            pending.append(
+                {
+                    "action": "recommended",
+                    "target": item.get("repo_full_name")
+                    or item.get("url")
+                    or "",
+                    "item_id": item_id,
+                    "note": item["match_reason"],
+                    "signal": signal,
+                }
             )
-            recorded += 1
+        if pending:
+            recorded = self.database.save_feedback_batch(
+                pending,
+            )
         return recorded
 
     def _score_item(

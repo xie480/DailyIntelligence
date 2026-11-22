@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+import os
 from pathlib import Path
+import tempfile
 from typing import Any, Iterable
 
-from .config import RuntimePaths
+from .config import DEFAULT_TIMEZONE, RuntimePaths, date_in_timezone
 from .deduplication import normalize_url
 
 
@@ -68,9 +70,14 @@ class DailyReportRenderer:
         items: Iterable[dict[str, Any]],
         report_date: date | None = None,
         total_limit: int = 15,
+        timezone_name: str = DEFAULT_TIMEZONE,
+        now: datetime | None = None,
     ) -> str:
         """渲染日报主体和三条重点推荐。"""
-        current_date = report_date or date.today()
+        current_date = report_date or date_in_timezone(
+            timezone_name,
+            now,
+        )
         grouped: dict[str, list[dict[str, Any]]] = {
             key: []
             for key, _, _ in SECTION_DEFINITIONS
@@ -220,13 +227,27 @@ def save_report(
         exist_ok=True,
     )
     report_path = paths.reports_dir / f"{report_date.isoformat()}.md"
-    temporary_path = report_path.with_name(
-        f".{report_path.name}.tmp"
-    )
-    temporary_path.write_text(
-        markdown,
-        encoding="utf-8",
-    )
-    temporary_path.replace(report_path)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=paths.reports_dir,
+            prefix=f".{report_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(
+                handle.name
+            )
+            handle.write(markdown)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary_path.replace(report_path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(
+                missing_ok=True,
+            )
     return report_path
 
